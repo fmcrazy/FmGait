@@ -189,7 +189,7 @@ def label_refinement(labels, features, aug_features, label_centers, sig, beta):
         # labels_lis[i] = beta * onehot_labels[i] + (1 - beta) * dist_martix[i]
         if label == -1:
             continue
-        labels_lis[i] = 0.2 * onehot_labels[i] + 0.8 * dist_martix[i]
+        labels_lis[i] = 0.8 * onehot_labels[i] + 0.2 * dist_martix[i]
     # refinement_pseudo_labels = torch.stack(labels_lis)
     # refinement_pseudo_labels = ts2np(labels_lis)
     return labels_lis, dist_martix

@@ -155,7 +155,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Self-paced contrastive learning on unsupervised re-ID")
 
     # 需要调整的参数
-    parser.add_argument('--eps', type=float, default=0.7,
+    parser.add_argument('--eps', type=float, default=0.6,
                         help="max neighbor distance for DBSCAN")
     parser.add_argument('--eps-gap', type=float, default=0.02,
                         help="multi-scale criterion for measuring cluster reliability")
