@@ -1,0 +1,93 @@
+data_cfg:
+  dataset_name: OUMVLP
+  dataset_root: /data/lxl/Gaitdata/OUMVLP/
+  dataset_partition: ./datasets/OUMVLP/OUMVLP.json
+  num_workers: 1
+  remove_no_gallery: false
+  test_dataset_name: OUMVLP
+
+evaluator_cfg:
+  enable_float16: false
+  restore_ckpt_strict: true
+  restore_hint: 40000
+  save_name: GaitSet
+  sampler:
+    batch_size: 16
+    sample_type: all_ordered
+    type: InferenceSampler
+  metric: euc # cos
+
+inference_cfg:
+  enable_float16: true
+  restore_ckpt_strict: true
+  restore_hint: 40000
+  save_name: GaitSet
+  sampler:
+    batch_shuffle: false
+    batch_size: 16
+    frames_num_fixed: 30
+    frames_num_max: 50
+    frames_num_min: 25
+    sample_type: fixed_unordered
+    type: InferenceSampler
+  metric: euc # cos
+
+loss_cfg:
+  loss_term_weight: 1.0
+  margin: 0.2
+  type: TripletLoss
+  log_prefix: triplet
+
+model_cfg:
+  model: GaitSet
+  in_channels:
+    - 1
+    - 32
+    - 64
+    - 128
+  SeparateFCs:
+    in_channels: 128
+    out_channels: 256
+    parts_num: 62
+  bin_num:
+    - 16
+    - 8
+    - 4
+    - 2
+    - 1
+
+optimizer_cfg:
+  lr: 0.1
+  momentum: 0.9
+  solver: SGD
+  weight_decay: 0.0005
+
+scheduler_cfg:
+  gamma: 0.1
+  milestones:
+    - 10000
+    - 20000
+    - 30000
+  scheduler: MultiStepLR
+
+trainer_cfg:
+  enable_float16: true
+  fix_BN: false
+  with_test: true
+  log_iter: 100
+  restore_ckpt_strict: true
+  restore_hint: ./output/CASIA-B/GaitSet/GaitSet/checkpoints/GaitSet-40000.pt
+  save_iter: 10000
+  save_name: GaitSet
+  sync_BN: false
+  total_iter: 250000
+  sampler:
+    batch_shuffle: false
+    batch_size:
+      - 8
+      - 16
+    frames_num_fixed: 30
+    frames_num_max: 50
+    frames_num_min: 25
+    sample_type: fixed_unordered
+    type: TripletSampler
