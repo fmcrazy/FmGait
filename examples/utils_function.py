@@ -86,8 +86,8 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
     refinement_pseudo_labels, dist_martix = label_refinement(pseudo_labels, features, aug_features, cluster_features, args.sig, beta=0.8)
 
     # 使用数据增强进行伪标签细化
-    soft_labels = compute_aug_dist_martix(pseudo_labels, cluster_features, aug_features, 5)
-    refinement_pseudo_labels = compute_model_soft(soft_labels, refinement_pseudo_labels, pseudo_labels)
+    # soft_labels = compute_aug_dist_martix(pseudo_labels, cluster_features, aug_features, 5)
+    # refinement_pseudo_labels = compute_model_soft(soft_labels, refinement_pseudo_labels, pseudo_labels)
 
     pseudo_labeled_dataset = OrderedDict()
     for i, (fname, label) in enumerate(zip(sorted(seqs_data), pseudo_labels)):

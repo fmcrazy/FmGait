@@ -9,36 +9,31 @@ from torch import nn, autograd
 class CM(autograd.Function):
 
     @staticmethod
-    def forward(ctx, inputs, targets, w_labels, features, momentum):
+    def forward(ctx, inputs, targets, features, momentum):
         ctx.features = features
         ctx.momentum = momentum
-        ctx.w_labels = w_labels
-        ctx.save_for_backward(inputs, targets, w_labels)
+        ctx.save_for_backward(inputs, targets)
         outputs = inputs.mm(ctx.features.t())
 
         return outputs
 
     @staticmethod
     def backward(ctx, grad_outputs):
-        inputs, targets, w_labels = ctx.saved_tensors
+        inputs, targets = ctx.saved_tensors
         grad_inputs = None
         if ctx.needs_input_grad[0]:   # 判断是否需要计算梯度
             grad_inputs = grad_outputs.mm(ctx.features)  # inputs的梯度 = outputs的梯度*features
 
         # momentum update
-        for x, y, w in zip(inputs, targets, w_labels):
-            # if ctx.momentum == 0.2:
-            #     ctx.features[y] = ctx.momentum/w * ctx.features[y] + (1. - ctx.momentum/w) * x  # 使用soft动量更新
-            # if ctx.momentum == 0.9:
-            #     ctx.features[y] = (1. - ctx.momentum * w) * ctx.features[y] + ctx.momentum * w * x  # 使用soft动量更新,改变动量的值为0.8
+        for x, y in zip(inputs, targets):
             ctx.features[y] = ctx.momentum * ctx.features[y] + (1. - ctx.momentum) * x
             ctx.features[y] /= ctx.features[y].norm()  # 存在在memory bank中的特征需要归一化
 
-        return grad_inputs, None, None, None, None
+        return grad_inputs, None, None, None
 
 
-def cm(inputs, indexes, w_labels, features, momentum=0.5):
-    return CM.apply(inputs, indexes, w_labels, features, torch.Tensor([momentum]).to(inputs.device))
+def cm(inputs, indexes, features, momentum=0.5):
+    return CM.apply(inputs, indexes, features, torch.Tensor([momentum]).to(inputs.device))
 
 
 class CM_Hard(autograd.Function):
@@ -80,6 +75,22 @@ def cm_hard(inputs, indexes, features, momentum=0.5):
     return CM_Hard.apply(inputs, indexes, features, torch.Tensor([momentum]).to(inputs.device))  # inputs 是batch的特征， indexes是伪标签， features是memory bank中的存储的特征
 
 
+class SoftEntropySmooth(nn.Module):
+    def __init__(self, epsilon=0.1):
+        super(SoftEntropySmooth, self).__init__()
+        self.epsilon = epsilon
+        self.logsoftmax = nn.LogSoftmax(dim=1).cuda()
+
+    def forward(self, inputs, soft_targets, targets):
+        log_probs = self.logsoftmax(inputs)
+        # targets = torch.zeros_like(log_probs).scatter_(
+        #     1, targets.unsqueeze(1), 1)
+        soft_targets = F.softmax(soft_targets, dim=1)
+        smooth_targets = (1 - self.epsilon) * targets + \
+            self.epsilon * soft_targets
+        loss = (- smooth_targets.detach() * log_probs).mean(0).sum()
+        return loss
+
 class ClusterMemory(nn.Module, ABC):
     def __init__(self, num_features, num_samples, temp=0.05, momentum=0.2, use_hard=False):
         super(ClusterMemory, self).__init__()
@@ -89,25 +100,31 @@ class ClusterMemory(nn.Module, ABC):
         self.momentum = momentum
         self.temp = temp
         self.use_hard = use_hard
+        self.soft_ce_loss = SoftEntropySmooth(epsilon=0.4).cuda()
 
         self.register_buffer('features', torch.zeros(num_samples, num_features)) # 注册一个缓冲区，并且不需要求梯度（反向传播）
 
 
-    def forward(self, inputs, targets, w_labels, refinement_labels=None, use_iou=False, use_refine_label=False, use_ema=False):
+    def forward(self, inputs, ema_inputs, targets, refinement_labels=None, use_refine_label=False):
 
         # if use_ema:
         #     inputs = F.normalize(inputs, dim=1).cuda()
 
         inputs = F.normalize(inputs, dim=1).cuda()
+        ema_inputs = F.normalize(ema_inputs).cuda()
         if self.use_hard:
             outputs = cm_hard(inputs, targets, self.features, self.momentum)
         else:
-            outputs = cm(inputs, targets, w_labels, self.features, self.momentum)
+            outputs = cm(inputs, targets, self.features, self.momentum)
         outputs /= self.temp
+
+        regression = ema_inputs.mm(self.features.t())
+        regression /= self.temp
 
         if use_refine_label:
             refinement_labels = refinement_labels.cuda()
-            loss = F.cross_entropy(outputs, refinement_labels)
+            # loss = F.cross_entropy(outputs, refinement_labels)
+            loss = self.soft_ce_loss(outputs, regression, refinement_labels)
         else:
             loss = F.cross_entropy(outputs, targets)
         return loss

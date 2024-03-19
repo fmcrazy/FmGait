@@ -45,11 +45,11 @@ from examples.utils_function import vie_t_sne
 from examples.utils_function import cluster_and_memory
 import gc
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
 os.environ['MASTER_ADDR'] = 'localhost'
-os.environ['MASTER_PORT'] = '8928'
+os.environ['MASTER_PORT'] = '7228'
 os.environ['LOCAL_RANK'] = '0'
 os.environ["OMP_NUM_THREADS"] = "1"
 
