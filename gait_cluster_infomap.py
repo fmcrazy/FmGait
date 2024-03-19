@@ -45,11 +45,11 @@ from examples.utils_function import vie_t_sne
 from examples.utils_function import cluster_and_memory
 import gc
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
 os.environ['MASTER_ADDR'] = 'localhost'
-os.environ['MASTER_PORT'] = '8261'
+os.environ['MASTER_PORT'] = '8928'
 os.environ['LOCAL_RANK'] = '0'
 os.environ["OMP_NUM_THREADS"] = "1"
 
@@ -82,9 +82,9 @@ def main():
     Model = getattr(models, model_cfg['model'])
     model = Model(cfgs, training=True)
 
-    # ema_model = Model(cfgs, training=True)
-    # for param in ema_model.parameters():
-    #     param.requires_grad = False
+    ema_model = Model(cfgs, training=True)
+    for param in ema_model.parameters():
+        param.requires_grad = False
 
     # BN层实现分布式训练
     # if cfgs['trainer_cfg']['sync_BN']:
@@ -117,7 +117,7 @@ def main():
         pseudo_labels, memory, pseudo_labeled_dataset, refinement_dataset, labels_weight= cluster_and_memory(model, epoch, args, use_leg=False)
 
         trainer.memory = memory
-        # trainer.ema_encoder = ema_model
+        trainer.ema_encoder = ema_model
 
         train_loader = IterLoader(model.train_loader, length=iters)
 
@@ -163,11 +163,11 @@ if __name__ == '__main__':
                         help="hyperparameter for KNN")
     parser.add_argument('--k2', type=int, default=4,
                         help="hyperparameter for outline")
-    parser.add_argument('--sig', type=int, default=5,
+    parser.add_argument('--sig', type=int, default=20,
                         help="sigmoid function")
-    parser.add_argument('--center_sig', type=int, default=10,
+    parser.add_argument('--center_sig', type=int, default=5,
                         help="sigmoid function")
-    parser.add_argument('--epochs', type=int, default=20)
+    parser.add_argument('--epochs', type=int, default=15)
     parser.add_argument('--iters', type=int, default=200)
     parser.add_argument('--step-size', type=int, default=5)  # 将学习率衰减由20改为5
 

@@ -64,16 +64,18 @@ def compute_label_centers_my(labels, features, sig): # features是张量
         if label == -1:
             continue
         dist = compute_dist_a(features[i], centers[labels[i]])
-        distance[i] = dist
+        distance[i] = dist   # distance中存储了样本和聚类中其他样本的平均距离
 
     cluster_distance = collections.defaultdict(list)
     for i, label in enumerate(labels):
         if label == -1 :
             continue
-        cluster_distance[labels[i]].append(distance[i])
+        cluster_distance[label].append(distance[i])
 
     for idx in sorted(centers.keys()):
-        sigmoid_distance =  [ torch.sigmoid(100*(dist-min(cluster_distance[idx]))) for dist in cluster_distance[idx] ]
+        # sigmoid_distance =  [ torch.sigmoid(sig*(dist-min(cluster_distance[idx]))) for dist in cluster_distance[idx] ]
+        # cluster_distance = torch.stack(cluster_distance)
+        sigmoid_distance = keep_top_k(torch.tensor(cluster_distance[idx]), k=1)
         dist_total = sum(sigmoid_distance)
         norm_distance = [ sigmoid_dist/dist_total for sigmoid_dist in sigmoid_distance]
         centers[idx] = [ f * w for f, w in zip(centers[idx], norm_distance)]
@@ -150,11 +152,35 @@ def compute_nearest_cluster_index(anchor, label, label_centers):
 
 def compute_dist_cluster(anchor, label_centers, sig):
     distance = cosine_similarity(anchor, label_centers)
-    sigmoid_distance = torch.sigmoid(100*(distance-torch.mean(distance)))
-    # sigmoid_distance = [ torch.sigmoid(dist) for dist in distance ]
+    # sigmoid_distance = torch.sigmoid(sig*(distance-torch.mean(distance)))
+    # # sigmoid_distance = [ torch.sigmoid(dist) for dist in distance ]
+    # sigmoid_distance = keep_top_k(distance, k=10)
+    sigmoid_distance = torch.sigmoid(30 * (distance - torch.mean(distance)))
     norm_distance = sigmoid_distance/torch.sum(sigmoid_distance)
 
     return norm_distance
+
+def compute_aug_dist_cluster(anchor, label_centers, sig):
+    distance = cosine_similarity(anchor, label_centers)
+    # sigmoid_distance = torch.sigmoid(sig*(distance-torch.mean(distance)))
+    # # sigmoid_distance = [ torch.sigmoid(dist) for dist in distance ]
+    sigmoid_distance = keep_top_k(distance, k=2)
+    # sigmoid_distance = torch.sigmoid(30 * (sigmoid_distance - torch.mean(sigmoid_distance)))
+    norm_distance = sigmoid_distance/torch.sum(sigmoid_distance)
+
+    return norm_distance
+
+
+def keep_top_k(tensor, k):
+    # 找到张量中的最大值及其索引
+    values, indices = torch.topk(tensor, k)
+
+    # 将除了最大的 k 个元素外的所有元素设为 0
+    result = torch.zeros_like(tensor)
+    # indices = torch.unravel_index(indices, tensor.shape)
+    result[indices] = values
+
+    return result
 
 def compute_dist_martix(labels, label_centers, features, sig):
     labels_weight = collections.defaultdict(list)
@@ -162,6 +188,17 @@ def compute_dist_martix(labels, label_centers, features, sig):
         if label == -1:
             continue
         dist_cluster = compute_dist_cluster(features[i], label_centers, sig)
+        labels_weight[i] = dist_cluster
+    # dist_martix = torch.stack(dist_martix, dim=0)
+
+    return labels_weight
+
+def compute_aug_dist_martix(labels, label_centers, features, sig):
+    labels_weight = collections.defaultdict(list)
+    for i, label in enumerate(labels):
+        if label == -1:
+            continue
+        dist_cluster = compute_aug_dist_cluster(features[i], label_centers, sig)
         labels_weight[i] = dist_cluster
     # dist_martix = torch.stack(dist_martix, dim=0)
 
@@ -189,7 +226,9 @@ def label_refinement(labels, features, aug_features, label_centers, sig, beta):
         # labels_lis[i] = beta * onehot_labels[i] + (1 - beta) * dist_martix[i]
         if label == -1:
             continue
-        labels_lis[i] = 0.8 * onehot_labels[i] + 0.2 * dist_martix[i]
+        labels_lis[i] = 0.4 * onehot_labels[i] + 0.6 * dist_martix[i]
     # refinement_pseudo_labels = torch.stack(labels_lis)
     # refinement_pseudo_labels = ts2np(labels_lis)
+
+
     return labels_lis, dist_martix

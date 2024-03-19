@@ -13,6 +13,7 @@ import numpy as np
 import cv2
 from collections import OrderedDict
 import collections
+from label_refinement.sil_score import compute_dist_cluster
 
 
 
@@ -31,12 +32,12 @@ def compute_soft_label(soft_labels, labels, features, mu_s=0.3):
     return refinement_pseudo_labels
 
 
-def compute_dist_cluster(anchor, label_centers, sig):
-    distance = torch.norm(label_centers - anchor, dim=1)
-    sigmoid_distance = torch.sigmoid(-distance/sig)
-    norm_distance = sigmoid_distance/torch.sum(sigmoid_distance)
-
-    return norm_distance
+# def compute_dist_cluster(anchor, label_centers, sig):
+#     distance = torch.norm(label_centers - anchor, dim=1)
+#     sigmoid_distance = torch.sigmoid(-distance/sig)
+#     norm_distance = sigmoid_distance/torch.sum(sigmoid_distance)
+#
+#     return norm_distance
 
 def extract_probabilities(features, centers, temp=30):
     features = F.normalize(features, dim=1)
@@ -45,13 +46,24 @@ def extract_probabilities(features, centers, temp=30):
     return prob
 
 def compute_soft(ema_labels, labels):
-    ema_labels = torch.tensor(ema_labels)
-    ema_labels = ema_labels.cuda()
+    ema_labels = torch.stack(ema_labels)
+    # ema_labels = ema_labels.cuda()
     labels = labels.cuda()
     ones_tensor = torch.ones_like(labels)
     for i, label in enumerate(labels):
-        ones_tensor[i] = 0.1 * ema_labels[i] + labels[i]
+        ones_tensor[i] = 0.5 * ema_labels[i] + 0.5*labels[i]
     return ones_tensor
+
+def compute_model_soft(soft_labels, refine_label, pseudo_labels):
+    # ema_labels = torch.stack(ema_labels)
+    # ema_labels = ema_labels.cuda()
+    # labels = labels.cuda()
+    onehot_labels= collections.defaultdict(list)
+    for i, label in enumerate(pseudo_labels):
+        if label==-1:
+            continue
+        onehot_labels[i] = 0.3 * soft_labels[i] + 0.7 * refine_label[i]
+    return onehot_labels
 
 def compute_dist_martix(labels, label_centers, features, sig):
     dist_martix = []
@@ -90,15 +102,18 @@ class ClusterContrastTrainer(object):
             data_time.update(time.time() - end)
 
             # process inputs
-            ipts, ema_ipts, labels, fnames, refinement_labels, w_labels = self._inputs_pretreament(inputs, pseudo_labeled_dataset,
+            ipts, labels, fnames, refinement_labels, w_labels = self._inputs_pretreament(inputs, pseudo_labeled_dataset,
                                                                                refinement_pseudo_labeled_dataset, labels_weight)
 
             f_out= self._forward(ipts)
             # ema_out = self.ema_forward(ema_ipts)
-            # soft_labels = compute_dist_martix(labels, ema_out, self.memory.features, 5)
+            # ema_out = self._forward(ema_ipts)
+            # label_centers = self.memory.features.clone()
+            # soft_labels = compute_dist_martix(labels,label_centers, ema_out, 5)
             # refinement_labels = compute_soft(soft_labels, refinement_labels)
 
             memory_loss = self.memory(f_out, labels, w_labels, refinement_labels, use_iou=False, use_refine_label=True)
+
 
             # 总的损失
             loss = memory_loss
@@ -147,9 +162,9 @@ class ClusterContrastTrainer(object):
             else:
                 index_lis.append(i)
         inputs = self.pre_inputs(inputs, index_lis)
-        ema_inputs = copy.deepcopy(inputs)
+        # ema_inputs = copy.deepcopy(inputs)
         ipts = self.encoder.inputs_pretreament(inputs, use_leg=False)
-        ema_ipts = self.encoder.aug_inputs_pretreament(ema_inputs, use_leg=False)
+        # ema_ipts = self.encoder.aug_inputs_pretreament(ema_inputs, use_leg=False)
 
         # 对输入数据进行数据增强
         # aug_inputs = copy.deepcopy(inputs)
@@ -159,10 +174,13 @@ class ClusterContrastTrainer(object):
         refinement_lables = torch.stack(refinement_lables)
         w_labels = torch.tensor(w_labels)
         fnames = inputs[4]
-        return ipts, ema_ipts, labels.cuda(), fnames, refinement_lables, w_labels.cuda()
+        return ipts, labels.cuda(), fnames, refinement_lables, w_labels.cuda()
 
     def _updata_ema(self, model, ema_model, global_step, alpha = 0.999):
-        alpha = min(1 - 1 / (global_step + 1), alpha)
+        # alpha = min(1 - 1 / (global_step + 1), alpha)
+        if global_step >= 99:
+            alpha = min(1 - 1 / (global_step - 98), alpha)
+
         for ema_param, param in zip(ema_model.parameters(), model.parameters()):
             # ema_param.data.add_(1 - alpha, param.data)
             ema_param.data = alpha * ema_param.data + (1 - alpha) * param.data

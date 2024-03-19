@@ -4,6 +4,7 @@ from __future__ import print_function, absolute_import
 import copy
 import os.path as osp
 
+from clustercontrast.trainers import compute_soft, compute_model_soft
 from opengait.utils import config_loader, get_ddp_module, init_seeds, params_count, get_msg_mgr
 import torch.distributed as dist
 import numpy as np
@@ -19,7 +20,7 @@ from opengait.utils import Odict, mkdir, ddp_all_gather
 from opengait.utils import get_valid_args, is_list, is_dict, np2var, ts2np, list2var, get_attr_from
 from opengait.evaluation import evaluator as eval_functions
 from opengait.utils import NoOp
-from label_refinement.sil_score import label_refinement
+from label_refinement.sil_score import label_refinement, compute_dist_martix, compute_aug_dist_martix
 from label_refinement.sil_score import compute_label_centers
 from label_refinement.sil_score import compute_label_centers_my
 import os
@@ -73,16 +74,21 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
         del feat_dists, feat_nbrs
 
     # 使用聚类中样本的平均值计算质心
-    # cluster_features = generate_cluster_features(pseudo_labels, features)
+    cluster_features = generate_cluster_features(pseudo_labels, features)
 
     # # 使用轮廓分数计算质心
     # alpha = 0.1 * math.tanh(epoch - args.epochs / 2)
     # cluster_features, pseudo_labels = compute_label_centers(pseudo_labels, features, alpha)  # 使用轮廓分数计算聚类质心
     # #
     # 使用样本平均距离的权重定义质心
-    cluster_features = compute_label_centers_my(pseudo_labels, features, args.center_sig)
+    # cluster_features = compute_label_centers_my(pseudo_labels, features, args.sig)
 
     refinement_pseudo_labels, dist_martix = label_refinement(pseudo_labels, features, aug_features, cluster_features, args.sig, beta=0.8)
+
+    # 使用数据增强进行伪标签细化
+    soft_labels = compute_aug_dist_martix(pseudo_labels, cluster_features, aug_features, 5)
+    refinement_pseudo_labels = compute_model_soft(soft_labels, refinement_pseudo_labels, pseudo_labels)
+
     pseudo_labeled_dataset = OrderedDict()
     for i, (fname, label) in enumerate(zip(sorted(seqs_data), pseudo_labels)):
         if label != -1:
@@ -101,7 +107,7 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
     labels_weight = OrderedDict()
     for i, (fname, label) in enumerate(zip(sorted(seqs_data), pseudo_labels)):
         if label != -1:
-            labels_weight[fname] = dist_martix[i][label]
+            labels_weight[fname] = refinement_pseudo_labels[i][label]
 
     num_cluster = len(set(pseudo_labels)) - (1 if -1 in pseudo_labels else 0)
     num_features = features.size(-1)
