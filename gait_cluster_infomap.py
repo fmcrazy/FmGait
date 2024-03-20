@@ -45,11 +45,11 @@ from examples.utils_function import vie_t_sne
 from examples.utils_function import cluster_and_memory
 import gc
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
 os.environ['MASTER_ADDR'] = 'localhost'
-os.environ['MASTER_PORT'] = '7228'
+os.environ['MASTER_PORT'] = '7291'
 os.environ['LOCAL_RANK'] = '0'
 os.environ["OMP_NUM_THREADS"] = "1"
 
@@ -122,7 +122,13 @@ def main():
         train_loader = IterLoader(model.train_loader, length=iters)
 
         train_loader.new_epoch()
-        trainer.train(epoch, train_loader, optimizer, pseudo_labeled_dataset,
+
+        # if epoch in step_size_list:  # 如果当前epoch在step_size列表中
+        #     idx = step_size_list.index(epoch)  # 找到当前epoch在列表中的索引
+        #     scheduler.step_size = step_size_list[idx + 1]  # 设置下一个step_size
+        #     scheduler.last_epoch = -1
+
+        trainer.train( epoch, train_loader, optimizer, pseudo_labeled_dataset,
                       refinement_dataset, labels_weight, print_freq=args.print_freq, train_iters=len(train_loader))
 
         # 测试

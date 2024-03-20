@@ -112,7 +112,7 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
     num_cluster = len(set(pseudo_labels)) - (1 if -1 in pseudo_labels else 0)
     num_features = features.size(-1)
     memory = ClusterMemory(num_features, num_cluster, temp=args.temp,
-                           momentum=args.momentum, use_hard=args.use_hard).cuda()
+                           momentum=args.momentum, use_hard=False).cuda()
     memory.features = F.normalize(cluster_features, dim=1).cuda()
 
     # 使用数据增强初始化一个memory bank
