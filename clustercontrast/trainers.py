@@ -88,7 +88,7 @@ class ClusterContrastTrainer(object):
     def train(self, epoch, data_loader, optimizer, pseudo_labeled_dataset, refinement_pseudo_labeled_dataset,
               labels_weight, print_freq, train_iters):
         self.encoder.train()
-        # self.ema_encoder.train()
+        self.ema_encoder.train()
         torch.autograd.set_detect_anomaly(True)
         batch_time = AverageMeter()  # 每个batch处理数据的时间
         data_time = AverageMeter()  # 每个batch加载数据的时间

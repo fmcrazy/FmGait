@@ -156,7 +156,7 @@ class ClusterMemory(nn.Module, ABC):
         inputs = F.normalize(inputs, dim=1).cuda()
         ema_inputs = F.normalize(ema_inputs).cuda()
         if self.use_hard:
-            outputs = cm_hard(inputs, targets, self.features, self.momentum)
+            outputs = cm_avg(inputs, targets, self.features, self.momentum)
         else:
             outputs = cm(inputs, targets, self.features, self.momentum)
         outputs /= self.temp
