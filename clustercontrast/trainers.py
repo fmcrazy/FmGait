@@ -32,48 +32,41 @@ def compute_soft_label(soft_labels, labels, features, mu_s=0.3):
     return refinement_pseudo_labels
 
 
-# def compute_dist_cluster(anchor, label_centers, sig):
-#     distance = torch.norm(label_centers - anchor, dim=1)
-#     sigmoid_distance = torch.sigmoid(-distance/sig)
-#     norm_distance = sigmoid_distance/torch.sum(sigmoid_distance)
+# def extract_probabilities(features, centers, temp=30):
+#     features = F.normalize(features, dim=1)
+#     logits = temp*features.mm(centers.t().clone())
+#     prob = F.softmax(logits, 1)
+#     return prob
 #
-#     return norm_distance
-
-def extract_probabilities(features, centers, temp=30):
-    features = F.normalize(features, dim=1)
-    logits = temp*features.mm(centers.t().clone())
-    prob = F.softmax(logits, 1)
-    return prob
-
-def compute_soft(ema_labels, labels):
-    ema_labels = torch.stack(ema_labels)
-    # ema_labels = ema_labels.cuda()
-    labels = labels.cuda()
-    ones_tensor = torch.ones_like(labels)
-    for i, label in enumerate(labels):
-        ones_tensor[i] = 0.5 * ema_labels[i] + 0.5*labels[i]
-    return ones_tensor
-
-def compute_model_soft(soft_labels, refine_label, pseudo_labels):
-    # ema_labels = torch.stack(ema_labels)
-    # ema_labels = ema_labels.cuda()
-    # labels = labels.cuda()
-    onehot_labels= collections.defaultdict(list)
-    for i, label in enumerate(pseudo_labels):
-        if label==-1:
-            continue
-        onehot_labels[i] = 0.3 * soft_labels[i] + 0.7 * refine_label[i]
-    return onehot_labels
-
-def compute_dist_martix(labels, label_centers, features, sig):
-    dist_martix = []
-    for i, label in enumerate(labels):
-        if label == -1:
-            continue
-        dist_cluster = compute_dist_cluster(features[i], label_centers, sig)
-        dist_martix.append(dist_cluster)
-
-    return dist_martix
+# def compute_soft(ema_labels, labels):
+#     ema_labels = torch.stack(ema_labels)
+#     # ema_labels = ema_labels.cuda()
+#     labels = labels.cuda()
+#     ones_tensor = torch.ones_like(labels)
+#     for i, label in enumerate(labels):
+#         ones_tensor[i] = 0.5 * ema_labels[i] + 0.5*labels[i]
+#     return ones_tensor
+#
+# def compute_model_soft(soft_labels, refine_label, pseudo_labels):
+#     # ema_labels = torch.stack(ema_labels)
+#     # ema_labels = ema_labels.cuda()
+#     # labels = labels.cuda()
+#     onehot_labels= collections.defaultdict(list)
+#     for i, label in enumerate(pseudo_labels):
+#         if label==-1:
+#             continue
+#         onehot_labels[i] = 0.3 * soft_labels[i] + 0.7 * refine_label[i]
+#     return onehot_labels
+#
+# def compute_dist_martix(labels, label_centers, features, sig):
+#     dist_martix = []
+#     for i, label in enumerate(labels):
+#         if label == -1:
+#             continue
+#         dist_cluster = compute_dist_cluster(features[i], label_centers, sig)
+#         dist_martix.append(dist_cluster)
+#
+#     return dist_martix
 
 class ClusterContrastTrainer(object):
     def __init__(self, encoder, ema_encoder=None, memory=None, aug_memory=None):
@@ -85,11 +78,11 @@ class ClusterContrastTrainer(object):
 
         # self.criterion_ce = CrossEntropyLabelSmooth(self.num_cluster).cuda()
 
-    def train(self, epoch, data_loader, optimizer, pseudo_labeled_dataset, refinement_pseudo_labeled_dataset,
-              labels_weight, print_freq, train_iters):
+    def train(self, args, epoch, data_loader, optimizer, pseudo_labeled_dataset, refinement_pseudo_labeled_dataset
+              , print_freq, train_iters):
         self.encoder.train()
         self.ema_encoder.train()
-        torch.autograd.set_detect_anomaly(True)
+        # torch.autograd.set_detect_anomaly(True)
         batch_time = AverageMeter()  # 每个batch处理数据的时间
         data_time = AverageMeter()  # 每个batch加载数据的时间
         losses = AverageMeter()
@@ -102,20 +95,14 @@ class ClusterContrastTrainer(object):
             data_time.update(time.time() - end)
 
             # process inputs
-            ipts, ema_ipts, labels, fnames, refinement_labels, w_labels = self._inputs_pretreament(inputs, pseudo_labeled_dataset,
-                                                                               refinement_pseudo_labeled_dataset, labels_weight)
+            ipts, ema_ipts, labels, fnames, refinement_labels = self._inputs_pretreament(inputs, pseudo_labeled_dataset,
+                                                                               refinement_pseudo_labeled_dataset)
 
             f_out= self._forward(ipts)
             with torch.no_grad():
                 ema_out = self.ema_forward(ema_ipts)
-            # ema_out = self._forward(ema_ipts)
-            # label_centers = self.memory.features.clone()
-            # soft_labels = compute_dist_martix(labels,label_centers, ema_out, 5)
-            # refinement_labels = compute_soft(soft_labels, refinement_labels)
 
-            # memory_loss = self.memory(f_out, labels, w_labels, refinement_labels, use_iou=False, use_refine_label=True)
-            memory_loss = self.memory(f_out, ema_out, labels, refinement_labels, use_refine_label=True)
-
+            memory_loss = self.memory(f_out, ema_out, labels, refinement_labels, args.use_refine_label, args.use_aug)
 
             # 总的损失
             loss = memory_loss
@@ -150,7 +137,7 @@ class ClusterContrastTrainer(object):
         inputs[4] = [elements for index, elements in enumerate(inputs[4]) if index not in index_lis]
         return inputs
 
-    def _inputs_pretreament(self, inputs, pseudo_labeled_dataset, refinement_pseudo_labeled_dataset, labels_weight):
+    def _inputs_pretreament(self, inputs, pseudo_labeled_dataset, refinement_pseudo_labeled_dataset):
 
         _, labels, _, _, fnames, _ =inputs
         index_lis = []
@@ -160,7 +147,6 @@ class ClusterContrastTrainer(object):
             if fname in pseudo_labeled_dataset  and fname in refinement_pseudo_labeled_dataset:
                 labels[i]= pseudo_labeled_dataset[fname]
                 refinement_lables.append(refinement_pseudo_labeled_dataset[fname])
-                w_labels.append(labels_weight[fname])
             else:
                 index_lis.append(i)
         inputs = self.pre_inputs(inputs, index_lis)
@@ -174,9 +160,8 @@ class ClusterContrastTrainer(object):
 
         labels = torch.tensor(inputs[1])
         refinement_lables = torch.stack(refinement_lables)
-        w_labels = torch.tensor(w_labels)
         fnames = inputs[4]
-        return ipts, ema_ipts, labels.cuda(), fnames, refinement_lables, w_labels.cuda()
+        return ipts, ema_ipts, labels.cuda(), fnames, refinement_lables
 
     def _updata_ema(self, model, ema_model, global_step, alpha = 0.999):
         # alpha = min(1 - 1 / (global_step + 1), alpha)
@@ -195,12 +180,6 @@ class ClusterContrastTrainer(object):
             outputs = inference_feat['embeddings']
             outputs = outputs.view(outputs.size(0), -1)
             outputs = outputs.to(torch.float32)
-
-            # ema_retval = self.ema_encoder(ema_inputs)
-            # ema_inference_feat = ema_retval['inference_feat']
-            # ema_outputs = ema_inference_feat['embeddings']
-            # ema_outputs = ema_outputs.view(outputs.size(0), -1)
-            # ema_outputs = ema_outputs.to(torch.float32)
 
         return outputs
 

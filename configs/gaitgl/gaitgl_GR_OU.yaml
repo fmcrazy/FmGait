@@ -64,7 +64,7 @@ trainer_cfg:
   with_test: true
   log_iter: 100
   restore_ckpt_strict: true
-  restore_hint:  "/code/lxl/Gaitmemory/output/GREW/GaitGL/GaitGL-250000.pt"
+  restore_hint: "/code/lxl/GaitPRC/output/GREW/GaitGL/GaitGL/checkpoints/GaitGL-250000.pt"
 
   save_iter: 10000
   save_name: GaitGL

@@ -70,7 +70,7 @@ scheduler_cfg:
 trainer_cfg:
   enable_float16: true
   log_iter: 100
-  with_test: true
+  with_test: false
   restore_ckpt_strict: true
   restore_hint: 'output/OUMVLP/GaitSet/GaitSet/checkpoints/GaitSet-250000.pt'
   save_iter: 10000

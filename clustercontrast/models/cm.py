@@ -118,24 +118,73 @@ class CM_Avg(autograd.Function):
 def cm_avg(inputs, indexes, features, momentum=0.5):
     return CM_Avg.apply(inputs, indexes, features, torch.Tensor([momentum]).to(inputs.device))
 
+
+class CM_WgtMean(autograd.Function):
+
+    @staticmethod
+    def forward(ctx, inputs, targets, features, momentum, tau_w):
+        ctx.features = features
+        ctx.momentum = momentum
+        ctx.tau_w = tau_w
+        ctx.save_for_backward(inputs, targets)
+        outputs = inputs.mm(ctx.features.t())
+
+        return outputs
+
+    @staticmethod
+    def backward(ctx, grad_outputs):
+        inputs, targets = ctx.saved_tensors
+        grad_inputs = None
+        if ctx.needs_input_grad[0]:
+            grad_inputs = grad_outputs.mm(ctx.features)
+
+        batch_centers = collections.defaultdict(list)
+        for instance_feature, index in zip(inputs, targets.tolist()):
+            batch_centers[index].append(instance_feature)
+
+        for index, features in batch_centers.items():
+            distances = []
+            for feature in features:
+                distance = feature.unsqueeze(0).mm(
+                    ctx.features[index].unsqueeze(0).t())[0][0]
+                distances.append(distance)
+
+            # distances = F.normalize(torch.stack(distances, dim=0), dim=0)
+            distances = torch.stack(distances, dim=0)
+            w = F.softmax(- distances / ctx.tau_w, dim=0)
+            features = torch.stack(features, dim=0)
+            w_mean = w.unsqueeze(1).expand_as(features) * features
+            w_mean = w_mean.sum(dim=0)
+            # mean = torch.stack(features, dim=0).mean(0)
+            ctx.features[index] = ctx.features[index] * \
+                ctx.momentum + (1 - ctx.momentum) * w_mean
+            ctx.features[index] /= ctx.features[index].norm()
+
+        return grad_inputs, None, None, None, None
+
+
+def cm_wgtmean(inputs, indexes, features, momentum=0.5, tau_w=0.09):
+    return CM_WgtMean.apply(inputs, indexes, features, torch.Tensor([momentum]).to(inputs.device), torch.Tensor([tau_w]).to(inputs.device))
+
 class SoftEntropySmooth(nn.Module):
     def __init__(self, epsilon=0.1):
         super(SoftEntropySmooth, self).__init__()
         self.epsilon = epsilon
         self.logsoftmax = nn.LogSoftmax(dim=1).cuda()
 
-    def forward(self, inputs, soft_targets, targets):
+    def forward(self, inputs, soft_targets, targets, use_refine_label=True):
         log_probs = self.logsoftmax(inputs)
-        # targets = torch.zeros_like(log_probs).scatter_(
-        #     1, targets.unsqueeze(1), 1)
-        # soft_targets = F.softmax(soft_targets, dim=1)
+        # if use_refine_label:
+        #     targets = torch.zeros_like(log_probs).scatter_(
+        #         1, targets.unsqueeze(1), 1)
+        #     soft_targets = F.softmax(soft_targets, dim=1)
         smooth_targets = (1 - self.epsilon) * targets + \
             self.epsilon * soft_targets
         loss = (- smooth_targets.detach() * log_probs).mean(0).sum()
         return loss
 
 class ClusterMemory(nn.Module, ABC):
-    def __init__(self, num_features, num_samples, temp=0.05, momentum=0.2, use_hard=False):
+    def __init__(self, num_features, num_samples, aug_weight=0.4,  k=2, temp=0.05, momentum=0.2, use_hard=True):
         super(ClusterMemory, self).__init__()
         self.num_features = num_features  # 每个特征的维度
         self.num_samples = num_samples   # 聚类的数量
@@ -143,12 +192,13 @@ class ClusterMemory(nn.Module, ABC):
         self.momentum = momentum
         self.temp = temp
         self.use_hard = use_hard
-        self.soft_ce_loss = SoftEntropySmooth(epsilon=0.4).cuda()
+        self.soft_ce_loss = SoftEntropySmooth(aug_weight).cuda()
+        self.k = k
 
         self.register_buffer('features', torch.zeros(num_samples, num_features)) # 注册一个缓冲区，并且不需要求梯度（反向传播）
 
 
-    def forward(self, inputs, ema_inputs, targets, refinement_labels=None, use_refine_label=False):
+    def forward(self, inputs, ema_inputs, targets, refinement_labels=None, use_refine_label=False, use_aug=False):
 
         # if use_ema:
         #     inputs = F.normalize(inputs, dim=1).cuda()
@@ -160,16 +210,21 @@ class ClusterMemory(nn.Module, ABC):
         else:
             outputs = cm(inputs, targets, self.features, self.momentum)
         outputs /= self.temp
-        regression =  compute_aug_dist_martix(targets, self.features, ema_inputs, 5)
+        regression =  compute_aug_dist_martix(targets, self.features, ema_inputs, k=self.k)
         regression = [regression[key] for key in regression.keys()]
         regression = torch.stack(regression)
         # regression = ema_inputs.mm(self.features.t())
         # regression /= self.temp
 
-        if use_refine_label:
+        if use_refine_label and use_aug:
             refinement_labels = refinement_labels.cuda()
-            # loss = F.cross_entropy(outputs, refinement_labels)
             loss = self.soft_ce_loss(outputs, regression, refinement_labels)
+
+        elif use_refine_label:
+            refinement_labels = refinement_labels.cuda()
+            loss = F.cross_entropy(outputs, refinement_labels)
+
         else:
             loss = F.cross_entropy(outputs, targets)
+
         return loss

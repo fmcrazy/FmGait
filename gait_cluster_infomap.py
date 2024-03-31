@@ -45,7 +45,7 @@ from examples.utils_function import vie_t_sne
 from examples.utils_function import cluster_and_memory
 import gc
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
 os.environ['MASTER_ADDR'] = 'localhost'
@@ -106,7 +106,6 @@ def main():
 
     # Model.run_test(model)
 
-    # stroed_loss = []
     stroed_nm_acc=[]
     stroed_bg_acc=[]
     stroed_cl_acc=[]
@@ -114,7 +113,7 @@ def main():
 
     for epoch in range(args.epochs):
 
-        pseudo_labels, memory, pseudo_labeled_dataset, refinement_dataset, labels_weight= cluster_and_memory(model, epoch, args, use_leg=False)
+        pseudo_labels, memory, pseudo_labeled_dataset, refinement_dataset = cluster_and_memory(model, epoch, args, use_leg=False)
 
         trainer.memory = memory
         trainer.ema_encoder = ema_model
@@ -123,13 +122,8 @@ def main():
 
         train_loader.new_epoch()
 
-        # if epoch in step_size_list:  # 如果当前epoch在step_size列表中
-        #     idx = step_size_list.index(epoch)  # 找到当前epoch在列表中的索引
-        #     scheduler.step_size = step_size_list[idx + 1]  # 设置下一个step_size
-        #     scheduler.last_epoch = -1
-
-        trainer.train( epoch, train_loader, optimizer, pseudo_labeled_dataset,
-                      refinement_dataset, labels_weight, print_freq=args.print_freq, train_iters=len(train_loader))
+        trainer.train(args, epoch, train_loader, optimizer, pseudo_labeled_dataset,
+                      refinement_dataset, print_freq=args.print_freq, train_iters=len(train_loader))
 
         # 测试
         result_dict = Model.run_test(model)
@@ -140,6 +134,7 @@ def main():
             stroed_nm_acc.append(result_dict['scalar/test_accuracy/NM@R1'])
             stroed_bg_acc.append(result_dict['scalar/test_accuracy/BG@R1'])
             stroed_cl_acc.append(result_dict['scalar/test_accuracy/CL@R1'])
+
         elif cfgs['data_cfg']['dataset_name'] == 'OUMVLP':
             stroed_nm_acc.append(result_dict['scalar/test_accuracy/NM@R1'])
         else:
@@ -150,6 +145,7 @@ def main():
     # 利用matlab画准确率的图
     if cfgs['data_cfg']['dataset_name'] == 'CASIA-B':
         vis_plot(stroed_nm_acc, stroed_bg_acc, stroed_cl_acc, args.epochs)
+
     else:
         oumvlp_vis_plot(stroed_nm_acc, args.epochs)
 
@@ -169,13 +165,22 @@ if __name__ == '__main__':
                         help="hyperparameter for KNN")
     parser.add_argument('--k2', type=int, default=4,
                         help="hyperparameter for outline")
-    parser.add_argument('--sig', type=int, default=20,
+    parser.add_argument('--k', type=int, default=2,
+                        help="hyperparameter for outline")
+    parser.add_argument('--refine_weight', type=float, default=0.4,
+                        help="sigmoid function")
+    parser.add_argument('--sig', type=int, default=30,
+                        help="sigmoid function")
+    parser.add_argument('--aug_weight', type=float, default=0.4,
                         help="sigmoid function")
     parser.add_argument('--center_sig', type=int, default=5,
                         help="sigmoid function")
     parser.add_argument('--epochs', type=int, default=15)
     parser.add_argument('--iters', type=int, default=200)
     parser.add_argument('--step-size', type=int, default=5)  # 将学习率衰减由20改为5
+    parser.add_argument('--use_hard', type=bool, default=True)
+    parser.add_argument('--use_refine_label', type=bool, default=True)
+    parser.add_argument('--use_aug', type=bool, default=True)
 
     parser.add_argument('--features', type=int, default=0)
     parser.add_argument('--dropout', type=float, default=0)
@@ -193,7 +198,6 @@ if __name__ == '__main__':
     parser.add_argument('--temp', type=float, default=0.05,
                         help="temperature for scaling contrastive loss")
 
-    parser.add_argument('--use-hard', action="store_true")
     parser.add_argument('--no-cam', action="store_true")
     parser.add_argument('--local_rank', type=int, default=0,
                         help="passed by torch.distributed.launch module")

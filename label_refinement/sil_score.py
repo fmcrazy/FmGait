@@ -73,9 +73,10 @@ def compute_label_centers_my(labels, features, sig): # features是张量
         cluster_distance[label].append(distance[i])
 
     for idx in sorted(centers.keys()):
-        # sigmoid_distance =  [ torch.sigmoid(sig*(dist-min(cluster_distance[idx]))) for dist in cluster_distance[idx] ]
+        mea = sum(cluster_distance[idx])/len(cluster_distance[idx])
+        sigmoid_distance =  [ torch.sigmoid(1*(dist-mea)) for dist in cluster_distance[idx] ]
         # cluster_distance = torch.stack(cluster_distance)
-        sigmoid_distance = keep_top_k(torch.tensor(cluster_distance[idx]), k=1)
+        # sigmoid_distance = keep_top_k(torch.tensor(cluster_distance[idx]), k=1)
         dist_total = sum(sigmoid_distance)
         norm_distance = [ sigmoid_dist/dist_total for sigmoid_dist in sigmoid_distance]
         centers[idx] = [ f * w for f, w in zip(centers[idx], norm_distance)]
@@ -123,11 +124,6 @@ def find_index(lst, num):
             return i+1
     return len(lst)
 
-# def compute_dist_a(anchor, clusters):
-#     clusters = torch.stack(clusters)
-#     dist_a = torch.norm(clusters - anchor, dim=1)
-#     avg_dist_a = torch.mean(dist_a)
-#     return avg_dist_a
 
 def compute_dist_a(anchor, clusters):
     clusters = torch.stack(clusters)
@@ -152,19 +148,15 @@ def compute_nearest_cluster_index(anchor, label, label_centers):
 
 def compute_dist_cluster(anchor, label_centers, sig):
     distance = cosine_similarity(anchor, label_centers)
-    # sigmoid_distance = torch.sigmoid(sig*(distance-torch.mean(distance)))
-    # # sigmoid_distance = [ torch.sigmoid(dist) for dist in distance ]
     # sigmoid_distance = keep_top_k(distance, k=10)
-    sigmoid_distance = torch.sigmoid(30 * (distance - torch.mean(distance)))
+    sigmoid_distance = torch.sigmoid(sig * (distance - torch.mean(distance)))
     norm_distance = sigmoid_distance/torch.sum(sigmoid_distance)
 
     return norm_distance
 
-def compute_aug_dist_cluster(anchor, label_centers, sig):
+def compute_aug_dist_cluster(anchor, label_centers, k=2):
     distance = cosine_similarity(anchor, label_centers)
-    # sigmoid_distance = torch.sigmoid(sig*(distance-torch.mean(distance)))
-    # # sigmoid_distance = [ torch.sigmoid(dist) for dist in distance ]
-    sigmoid_distance = keep_top_k(distance, k=2)
+    sigmoid_distance = keep_top_k(distance, k)
     # sigmoid_distance = torch.sigmoid(30 * (sigmoid_distance - torch.mean(sigmoid_distance)))
     norm_distance = sigmoid_distance/torch.sum(sigmoid_distance)
 
@@ -193,12 +185,12 @@ def compute_dist_martix(labels, label_centers, features, sig):
 
     return labels_weight
 
-def compute_aug_dist_martix(labels, label_centers, features, sig):
+def compute_aug_dist_martix(labels, label_centers, features, k=2):
     labels_weight = collections.defaultdict(list)
     for i, label in enumerate(labels):
         if label == -1:
             continue
-        dist_cluster = compute_aug_dist_cluster(features[i], label_centers, sig)
+        dist_cluster = compute_aug_dist_cluster(features[i], label_centers, k=2)
         labels_weight[i] = dist_cluster
     # dist_martix = torch.stack(dist_martix, dim=0)
 
@@ -210,25 +202,26 @@ def extract_probabilities(features, centers, temp=30):
     prob = F.softmax(logits, 1)
     return prob
 
-def label_refinement(labels, features, aug_features, label_centers, sig, beta):
+def label_refinement(labels, features, aug_features, label_centers, refine_weight, sig):
+
+    # 计算每个样本的权重
     dist_martix = compute_dist_martix(labels, label_centers, features, sig)
     aug_labels = compute_dist_martix(labels, label_centers, aug_features, sig)
+
     # 将labels变为独热编码
-    N = len(labels)
-    C = len(set(labels)) - (1 if -1 in labels else 0)
+    N = len(labels)  # 样本的数量
+    C = len(set(labels)) - (1 if -1 in labels else 0)  # 聚类的数量
     onehot_labels = torch.full(size=(N, C), fill_value=0).cuda()
     labels_lis = collections.defaultdict(list)
     for i in range(N):
         index = labels[i]
         if index != -1:
             onehot_labels[i][index] = 1
+
+    # 计算细化的伪标签
     for i, label in enumerate(labels):
-        # labels_lis[i] = beta * onehot_labels[i] + (1 - beta) * dist_martix[i]
         if label == -1:
             continue
-        labels_lis[i] = 0.4 * onehot_labels[i] + 0.6 * dist_martix[i]
-    # refinement_pseudo_labels = torch.stack(labels_lis)
-    # refinement_pseudo_labels = ts2np(labels_lis)
-
+        labels_lis[i] = refine_weight * onehot_labels[i] + (1 - refine_weight) * dist_martix[i]
 
     return labels_lis, dist_martix

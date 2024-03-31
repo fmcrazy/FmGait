@@ -4,7 +4,7 @@ from __future__ import print_function, absolute_import
 import copy
 import os.path as osp
 
-from clustercontrast.trainers import compute_soft, compute_model_soft
+# from clustercontrast.trainers import compute_soft, compute_model_soft
 from opengait.utils import config_loader, get_ddp_module, init_seeds, params_count, get_msg_mgr
 import torch.distributed as dist
 import numpy as np
@@ -52,8 +52,6 @@ import matplotlib
 
 import matplotlib.pyplot as plt
 
-
-
 def cluster_and_memory(model, epoch, args, use_leg=False):
     with torch.no_grad():
         print('==> Create pseudo labels for unlabeled data')
@@ -66,7 +64,7 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
         features_array = F.normalize(features, dim=1).cpu().numpy()
         feat_dists, feat_nbrs = get_dist_nbr(features=features_array, k=args.k1, knn_method='faiss-gpu')
         del features_array
-        #
+
         s = time.time()
         pseudo_labels = cluster_by_infomap(feat_nbrs, feat_dists, min_sim=args.eps, cluster_num=args.k2)
         pseudo_labels = pseudo_labels.astype(np.intp)
@@ -76,14 +74,10 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
     # 使用聚类中样本的平均值计算质心
     cluster_features = generate_cluster_features(pseudo_labels, features)
 
-    # # 使用轮廓分数计算质心
-    # alpha = 0.1 * math.tanh(epoch - args.epochs / 2)
-    # cluster_features, pseudo_labels = compute_label_centers(pseudo_labels, features, alpha)  # 使用轮廓分数计算聚类质心
-    # #
     # 使用样本平均距离的权重定义质心
     # cluster_features = compute_label_centers_my(pseudo_labels, features, args.sig)
 
-    refinement_pseudo_labels, dist_martix = label_refinement(pseudo_labels, features, aug_features, cluster_features, args.sig, beta=0.8)
+    refinement_pseudo_labels, dist_martix = label_refinement(pseudo_labels, features, aug_features, cluster_features, args.refine_weight, args.sig)
 
     # 使用数据增强进行伪标签细化
     # soft_labels = compute_aug_dist_martix(pseudo_labels, cluster_features, aug_features, 5)
@@ -99,10 +93,6 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
         if label !=-1:
             refinement_pseudo_labeled_dataset[fname] = refinement_pseudo_labels[i]
 
-    # refinement_pseudo_labeled_dataset = OrderedDict()
-    # for i, (fname, label, refinement_label) in enumerate(zip(sorted(seqs_data), pseudo_labels, refinement_pseudo_labels)):
-    #     if label != -1:
-    #         refinement_pseudo_labeled_dataset[fname] = refinement_label
 
     labels_weight = OrderedDict()
     for i, (fname, label) in enumerate(zip(sorted(seqs_data), pseudo_labels)):
@@ -111,8 +101,8 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
 
     num_cluster = len(set(pseudo_labels)) - (1 if -1 in pseudo_labels else 0)
     num_features = features.size(-1)
-    memory = ClusterMemory(num_features, num_cluster, temp=args.temp,
-                           momentum=args.momentum, use_hard=True).cuda()
+    memory = ClusterMemory(num_features, num_cluster, aug_weight=args.aug_weight, k=args.k, temp=args.temp,
+                           momentum=args.momentum, use_hard=args.use_hard).cuda()
     memory.features = F.normalize(cluster_features, dim=1).cuda()
 
     # 使用数据增强初始化一个memory bank
@@ -120,7 +110,7 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
 
     print('==> Statistics for epoch {}: {} clusters'.format(epoch, num_cluster))
 
-    return pseudo_labels, memory, pseudo_labeled_dataset, refinement_pseudo_labeled_dataset, labels_weight
+    return pseudo_labels, memory, pseudo_labeled_dataset, refinement_pseudo_labeled_dataset
 
 def compute_aug_memory(features, pseudo_labels, seqs_data, args):
     features = torch.cat([features[f].unsqueeze(0) for f in sorted(seqs_data)], 0)
