@@ -172,12 +172,12 @@ class SoftEntropySmooth(nn.Module):
         self.epsilon = epsilon
         self.logsoftmax = nn.LogSoftmax(dim=1).cuda()
 
-    def forward(self, inputs, soft_targets, targets, use_refine_label=True):
+    def forward(self, inputs, soft_targets, targets, use_aug=False):
         log_probs = self.logsoftmax(inputs)
-        # if use_refine_label:
-        #     targets = torch.zeros_like(log_probs).scatter_(
-        #         1, targets.unsqueeze(1), 1)
-        #     soft_targets = F.softmax(soft_targets, dim=1)
+        if use_aug:
+            targets = torch.zeros_like(log_probs).scatter_(
+                1, targets.unsqueeze(1), 1)
+            # soft_targets = F.softmax(soft_targets, dim=1)
         smooth_targets = (1 - self.epsilon) * targets + \
             self.epsilon * soft_targets
         loss = (- smooth_targets.detach() * log_probs).mean(0).sum()
@@ -223,7 +223,8 @@ class ClusterMemory(nn.Module, ABC):
         elif use_refine_label:
             refinement_labels = refinement_labels.cuda()
             loss = F.cross_entropy(outputs, refinement_labels)
-
+        elif use_aug:
+            loss = self.soft_ce_loss(outputs, regression, targets, use_aug)
         else:
             loss = F.cross_entropy(outputs, targets)
 

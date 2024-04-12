@@ -523,7 +523,7 @@ class BaseModel(MetaModel, nn.Module):
             _, real_labels, types, vies, fnames, _ = inputs
             for fname, output in zip(fnames, outputs):
                 features[fname] = output
-        return features
+            return features
 
     @ staticmethod
     def run_train(model):

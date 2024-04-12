@@ -45,7 +45,7 @@ from examples.utils_function import vie_t_sne
 from examples.utils_function import cluster_and_memory
 import gc
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
 os.environ['MASTER_ADDR'] = 'localhost'
@@ -167,6 +167,7 @@ if __name__ == '__main__':
                         help="hyperparameter for outline")
     parser.add_argument('--k', type=int, default=2,
                         help="hyperparameter for outline")
+
     parser.add_argument('--refine_weight', type=float, default=0.4,
                         help="sigmoid function")
     parser.add_argument('--sig', type=int, default=30,
@@ -178,8 +179,8 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=15)
     parser.add_argument('--iters', type=int, default=200)
     parser.add_argument('--step-size', type=int, default=5)  # 将学习率衰减由20改为5
-    parser.add_argument('--use_hard', type=bool, default=True)
-    parser.add_argument('--use_refine_label', type=bool, default=True)
+    parser.add_argument('--use_hard', type=bool, default=False)
+    parser.add_argument('--use_refine_label', type=bool, default=False)
     parser.add_argument('--use_aug', type=bool, default=True)
 
     parser.add_argument('--features', type=int, default=0)
@@ -198,7 +199,7 @@ if __name__ == '__main__':
     parser.add_argument('--temp', type=float, default=0.05,
                         help="temperature for scaling contrastive loss")
 
-    parser.add_argument('--no-cam', action="store_true")
+    # parser.add_argument('--no-cam', action="store_true")
     parser.add_argument('--local_rank', type=int, default=0,
                         help="passed by torch.distributed.launch module")
     main()
