@@ -72,10 +72,10 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
         del feat_dists, feat_nbrs
 
     # 使用聚类中样本的平均值计算质心
-    # cluster_features = generate_cluster_features(pseudo_labels, features)
+    cluster_features = generate_cluster_features(pseudo_labels, features)
 
     # 使用样本平均距离的权重定义质心
-    cluster_features = compute_label_centers_my(pseudo_labels, features)
+    # cluster_features = compute_label_centers_my(pseudo_labels, features)
 
     refinement_pseudo_labels, dist_martix = label_refinement(pseudo_labels, features, aug_features, cluster_features, args.refine_weight, args.sig)
 

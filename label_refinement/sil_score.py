@@ -49,7 +49,7 @@ def compute_label_centers(labels, features, alpha): # features是张量
     num_cluster = len(set(new_labels)) - (1 if -1 in new_labels else 0)
     return new_label_centers, new_labels
 
-def compute_label_centers_my(labels, features): # features是张量
+def compute_label_centers_my(labels, features, sig): # features是张量
     centers = collections.defaultdict(list)  # 当访问字典中不存在的键时会产生一个空列表作为默认值
     for i, label in enumerate(labels):
         if label == -1:
@@ -74,7 +74,7 @@ def compute_label_centers_my(labels, features): # features是张量
 
     for idx in sorted(centers.keys()):
         mea = sum(cluster_distance[idx])/len(cluster_distance[idx])
-        sigmoid_distance =  [ torch.sigmoid(dist) for dist in cluster_distance[idx] ]
+        sigmoid_distance =  [ torch.sigmoid(1*(dist-mea)) for dist in cluster_distance[idx] ]
         # cluster_distance = torch.stack(cluster_distance)
         # sigmoid_distance = keep_top_k(torch.tensor(cluster_distance[idx]), k=1)
         dist_total = sum(sigmoid_distance)
@@ -210,7 +210,7 @@ def label_refinement(labels, features, aug_features, label_centers, refine_weigh
 
     # 将labels变为独热编码
     N = len(labels)  # 样本的数量
-    C = len(set(labels)) - (1 if -1 in labels else 0)  # 聚类的数量
+    C = label_centers.size(0) # 聚类的数量
     onehot_labels = torch.full(size=(N, C), fill_value=0).cuda()
     labels_lis = collections.defaultdict(list)
     for i in range(N):

@@ -14,6 +14,7 @@ import cv2
 from collections import OrderedDict
 import collections
 from label_refinement.sil_score import compute_dist_cluster
+from label_refinement.sil_score import label_refinement
 
 
 
@@ -95,10 +96,15 @@ class ClusterContrastTrainer(object):
             data_time.update(time.time() - end)
 
             # process inputs
-            ipts, ema_ipts, labels, fnames, refinement_labels = self._inputs_pretreament(inputs, pseudo_labeled_dataset,
+            ipts, ema_ipts, labels, fnames, _ = self._inputs_pretreament(inputs, pseudo_labeled_dataset,
                                                                                refinement_pseudo_labeled_dataset)
 
             f_out= self._forward(ipts)
+            refinement_labels, _ = label_refinement(labels, f_out, f_out, self.memory.features, 0.4,
+                                                 30)
+            refinement_labels = [refinement_labels[key] for key in refinement_labels.keys()]
+            refinement_labels = torch.stack(refinement_labels)
+
             with torch.no_grad():
                 ema_out = self.ema_forward(ema_ipts)
 
@@ -142,7 +148,6 @@ class ClusterContrastTrainer(object):
         _, labels, _, _, fnames, _ =inputs
         index_lis = []
         refinement_lables = []
-        w_labels = []
         for i, fname in enumerate(fnames):
             if fname in pseudo_labeled_dataset  and fname in refinement_pseudo_labeled_dataset:
                 labels[i]= pseudo_labeled_dataset[fname]
@@ -150,14 +155,21 @@ class ClusterContrastTrainer(object):
             else:
                 index_lis.append(i)
         inputs = self.pre_inputs(inputs, index_lis)
+        l = int(len(inputs[1]) / 2)
         ema_inputs = copy.deepcopy(inputs)
+
         ipts = self.encoder.inputs_pretreament(inputs, use_leg=False)
         ema_ipts = self.encoder.aug_inputs_pretreament(ema_inputs, use_leg=False)
+
+        # ipts = self.encoder.q_inputs_pretreament(inputs, use_leg=False, length=l)
+        # ema_ipts = self.encoder.k_inputs_pretreament(ema_inputs, use_leg=False, length=l)
 
         # 对输入数据进行数据增强
         # aug_inputs = copy.deepcopy(inputs)
         # aug_ipts = self.encoder.dataaug_inputs_pretreament(aug_inputs, use_leg=False)
 
+        # labels = torch.tensor(inputs[1][:l])
+        # refinement_lables=refinement_lables[:l]
         labels = torch.tensor(inputs[1])
         refinement_lables = torch.stack(refinement_lables)
         fnames = inputs[4]
@@ -171,7 +183,6 @@ class ClusterContrastTrainer(object):
         for ema_param, param in zip(ema_model.parameters(), model.parameters()):
             # ema_param.data.add_(1 - alpha, param.data)
             ema_param.data = alpha * ema_param.data + (1 - alpha) * param.data
-
 
     def _forward(self, inputs):
         with autocast(enabled=self.encoder.engine_cfg['enable_float16']):
@@ -191,5 +202,6 @@ class ClusterContrastTrainer(object):
             ema_outputs = ema_outputs.view(ema_outputs.size(0), -1)
             ema_outputs = ema_outputs.to(torch.float32)
         return ema_outputs
+
 
 
