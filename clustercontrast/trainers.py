@@ -96,19 +96,22 @@ class ClusterContrastTrainer(object):
             data_time.update(time.time() - end)
 
             # process inputs
-            ipts, ema_ipts, labels, fnames, _ = self._inputs_pretreament(inputs, pseudo_labeled_dataset,
+            ipts, ema_ipts, labels, fnames, _, l = self._inputs_pretreament(inputs, pseudo_labeled_dataset,
                                                                                refinement_pseudo_labeled_dataset)
 
             f_out= self._forward(ipts)
-            refinement_labels, _ = label_refinement(labels, f_out, f_out, self.memory.features, 0.4,
-                                                 30)
-            refinement_labels = [refinement_labels[key] for key in refinement_labels.keys()]
-            refinement_labels = torch.stack(refinement_labels)
+            with torch.no_grad():
+                refinement_labels, _ = label_refinement(labels, f_out, f_out, self.memory.features, args.refine_weight,
+                                                args.sig)
+
+            re = [refinement_labels[key] for key in refinement_labels.keys()]
+            se = re[0:l]
+            refinement_labels_p = torch.stack(se)
 
             with torch.no_grad():
                 ema_out = self.ema_forward(ema_ipts)
 
-            memory_loss = self.memory(f_out, ema_out, labels, refinement_labels, args.use_refine_label, args.use_aug)
+            memory_loss = self.memory(f_out, ema_out, labels, refinement_labels_p, args.use_refine_label, args.use_aug)
 
             # 总的损失
             loss = memory_loss
@@ -158,22 +161,22 @@ class ClusterContrastTrainer(object):
         l = int(len(inputs[1]) / 2)
         ema_inputs = copy.deepcopy(inputs)
 
-        ipts = self.encoder.inputs_pretreament(inputs, use_leg=False)
-        ema_ipts = self.encoder.aug_inputs_pretreament(ema_inputs, use_leg=False)
+        # ipts = self.encoder.inputs_pretreament(inputs, use_leg=False)
+        # ema_ipts = self.encoder.aug_inputs_pretreament(ema_inputs, use_leg=False)
 
-        # ipts = self.encoder.q_inputs_pretreament(inputs, use_leg=False, length=l)
-        # ema_ipts = self.encoder.k_inputs_pretreament(ema_inputs, use_leg=False, length=l)
+        ipts = self.encoder.q_inputs_pretreament(inputs, use_leg=False, length=l)
+        ema_ipts = self.encoder.k_inputs_pretreament(ema_inputs, use_leg=False, length=l)
 
         # 对输入数据进行数据增强
         # aug_inputs = copy.deepcopy(inputs)
         # aug_ipts = self.encoder.dataaug_inputs_pretreament(aug_inputs, use_leg=False)
 
-        # labels = torch.tensor(inputs[1][:l])
-        # refinement_lables=refinement_lables[:l]
-        labels = torch.tensor(inputs[1])
+        labels = torch.tensor(inputs[1][:l])
+        refinement_lables=refinement_lables[:l]
+        # labels = torch.tensor(inputs[1])
         refinement_lables = torch.stack(refinement_lables)
         fnames = inputs[4]
-        return ipts, ema_ipts, labels.cuda(), fnames, refinement_lables
+        return ipts, ema_ipts, labels.cuda(), fnames, refinement_lables, l
 
     def _updata_ema(self, model, ema_model, global_step, alpha = 0.999):
         # alpha = min(1 - 1 / (global_step + 1), alpha)

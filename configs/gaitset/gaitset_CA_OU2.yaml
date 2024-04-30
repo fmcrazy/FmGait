@@ -84,8 +84,8 @@ trainer_cfg:
   sampler:
     batch_shuffle: false
     batch_size:
-      - 8
       - 16
+      - 8
     frames_num_fixed: 30
     frames_num_max: 50
     frames_num_min: 25

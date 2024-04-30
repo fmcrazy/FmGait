@@ -122,3 +122,81 @@ def compute_jaccard_distance(target_features, k1=20, k2=6, print_flag=True, sear
         print("Jaccard distance computing time cost: {}".format(time.time()-end))
 
     return jaccard_dist
+
+@torch.no_grad()
+def compute_ranked_list(features, k=20, search_option=0, fp16=False, verbose=True):
+
+    end = time.time()
+    if verbose:
+        print("Computing ranked list...")
+
+    if search_option < 3:
+        torch.cuda.empty_cache()
+        features = features.cuda().detach()
+
+    ngpus = faiss.get_num_gpus()
+
+    if search_option == 0:
+        # Faiss Search + PyTorch CUDA Tensors (1)
+        res = faiss.StandardGpuResources()
+        res.setDefaultNullStreamAllDevices()
+        _, initial_rank = search_raw_array_pytorch(res, features, features, k+1)
+        initial_rank = initial_rank.cpu().numpy()
+
+    elif search_option == 1:
+        # Faiss Search + PyTorch CUDA Tensors (2)
+        res = faiss.StandardGpuResources()
+        index = faiss.GpuIndexFlatL2(res, features.size(-1))
+        index.add(features.cpu().numpy())
+        _, initial_rank = search_index_pytorch(index, features, k+1)
+        res.syncDefaultStreamCurrentDevice()
+        initial_rank = initial_rank.cpu().numpy()
+
+    elif search_option == 2:
+        # PyTorch Search + PyTorch CUDA Tensors
+        torch.cuda.empty_cache()
+        features = features.cuda().detach()
+        dist_m = compute_euclidean_distance(features, cuda=True)
+        initial_rank = torch.argsort(dist_m, dim=1)
+        initial_rank = initial_rank.cpu().numpy()
+
+    else:
+        # Numpy Search (CPU)
+        torch.cuda.empty_cache()
+        features = features.cuda().detach()
+        dist_m = compute_euclidean_distance(features, cuda=False)
+        initial_rank = np.argsort(dist_m.cpu().numpy(), axis=1)
+        features = features.cpu()
+
+    features = features.cpu()
+    if verbose:
+        print("Ranked list computing time cost: {}".format(time.time() - end))
+
+    return initial_rank[:, 1:k+1]
+
+@torch.no_grad()
+def compute_euclidean_distance(features, others=None, cuda=False):
+    if others is None:
+        if cuda:
+            features = features.cuda()
+
+        n = features.size(0)
+        x = features.view(n, -1)
+        dist_m = torch.pow(x, 2).sum(dim=1, keepdim=True) * 2
+        dist_m = dist_m.expand(n, n) - 2 * torch.mm(x, x.t())
+        del features
+
+    else:
+        if cuda:
+            features = features.cuda()
+            others = others.cuda()
+
+        m, n = features.size(0), others.size(0)
+        dist_m = torch.pow(features, 2).sum(dim=1, keepdim=True).expand(m, n) +\
+                 torch.pow(others, 2).sum(dim=1, keepdim=True).expand(n, m).t()
+
+        dist_m.addmm_(features, others.t(), beta=1, alpha=-2)
+        del features, others
+
+    return dist_m
+

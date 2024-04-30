@@ -39,7 +39,7 @@ from opengait.utils.common import ts2np
 
 from clustercontrast.utils.infomap_cluster import get_dist_nbr, cluster_by_infomap
 from clustercontrast.models.cm import ClusterMemory
-from clustercontrast.utils.faiss_rerank import compute_jaccard_distance
+from clustercontrast.utils.faiss_rerank import compute_jaccard_distance, compute_ranked_list
 from sklearn.cluster import DBSCAN
 
 
@@ -55,15 +55,30 @@ import matplotlib.pyplot as plt
 def cluster_and_memory(model, epoch, args, use_leg=False):
     with torch.no_grad():
         print('==> Create pseudo labels for unlabeled data')
-        seqs_data = [path[-1][0] for path in model.inference_train_loader.dataset.seqs_info ]
+        seqs_data = [path[-1][0] for path in model.inference_train_loader.dataset.seqs_info]
         rank = torch.distributed.get_rank()
-        features, aug_features, out_shape= model.ccr_inference(rank, use_leg)
-        aug_features = torch.cat([aug_features[f].unsqueeze(0) for f in sorted(seqs_data)], 0)
+        features, out_shape, part_features = model.ccr_inference(rank, use_leg)
+        # aug_features = torch.cat([aug_features[f].unsqueeze(0) for f in sorted(seqs_data)], 0)
         features = torch.cat([features[f].unsqueeze(0) for f in sorted(seqs_data)], 0)  # (8107,15872)
+        aug_features = features.clone()
 
-        features_array = F.normalize(features, dim=1).cpu().numpy()
+        part_features = torch.cat([part_features[f].unsqueeze(0) for f in sorted(seqs_data)], 0)
+        part_features = compute_part_feature(part_features, part_num=8)
+        part_features = torch.stack(part_features)
+        score = compute_cross_agreement(features, part_features, k=20)
+        infomap_features = torch.zeros_like(features)
+        # infomap_features = part_features[0]
+        part_features = part_features.permute(1,0,2)
+        N, P = score.size()
+        part_weight = 0.0
+        for i in range(N):
+            sum = 0
+            for j in range(P):
+                sum += part_features[i][j]*score[i][j]
+            infomap_features[i] = part_weight * features[i] + (1-part_weight) * sum
+        features_array = F.normalize(infomap_features, dim=1).cpu().numpy()
         feat_dists, feat_nbrs = get_dist_nbr(features=features_array, k=args.k1, knn_method='faiss-gpu')
-        del features_array
+        del features_array, infomap_features, part_features
 
         s = time.time()
         pseudo_labels = cluster_by_infomap(feat_nbrs, feat_dists, min_sim=args.eps, cluster_num=args.k2)
@@ -112,6 +127,26 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
 
     return pseudo_labels, memory, pseudo_labeled_dataset, refinement_pseudo_labeled_dataset
 
+
+def compute_cross_agreement(features_g, features_p, k, search_option=0):
+    print("Compute cross agreement score...")
+    P, N, F = features_p.size()
+    score = torch.FloatTensor()
+    end = time.time()
+    ranked_list_g = compute_ranked_list(features_g, k=k, search_option=search_option, verbose=False)
+
+    for i in range(P):
+        ranked_list_p_i = compute_ranked_list(features_p[i], k=k, search_option=search_option, verbose=False)
+        intersect_i = torch.FloatTensor(
+            [len(np.intersect1d(ranked_list_g[j], ranked_list_p_i[j])) for j in range(N)])
+        union_i = torch.FloatTensor(
+            [len(np.union1d(ranked_list_g[j], ranked_list_p_i[j])) for j in range(N)])
+        score_i = intersect_i / union_i
+        score = torch.cat([score, score_i.unsqueeze(1)], dim=1)
+    for i in range(score.size(0)):
+        score[i] = score[i]/torch.sum(score[i])
+    print("Cross agreement score time cost: {}".format(time.time() - end))
+    return score
 def compute_aug_memory(features, pseudo_labels, seqs_data, args):
     features = torch.cat([features[f].unsqueeze(0) for f in sorted(seqs_data)], 0)
     cluster_features = compute_label_centers_my(pseudo_labels, features, args.center_sig)
@@ -139,14 +174,14 @@ def compute_part_feature(features, part_num):
     all_part_features = []
     part_index = math.ceil(features.size(1)/part_num)
     for i in range(part_num):
+        part_features = torch.zeros_like(features).cuda()
         if (i+1)*part_index<=features.size(1):
-            part_features = features[:,i*part_index:(i+1)*part_index,:]
+            part_features[:,i*part_index:(i+1)*part_index,:] = features[:,i*part_index:(i+1)*part_index,:]
         else:
-            part_features = features[:,i * part_index:features.size(1), :]
+            part_features[:,i*part_index:(i+1)*part_index,:] = features[:,i * part_index:features.size(1), :]
         part_features = part_features.view(part_features.size(0), -1)
         part_features = part_features.to(torch.float32)
-        features_array = F.normalize(part_features, dim=1).cpu().numpy()
-        all_part_features.append(features_array)
+        all_part_features.append(part_features)
 
     return all_part_features
 

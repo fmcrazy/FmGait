@@ -47,7 +47,7 @@ class TripletSampler(tordata.sampler.Sampler):
                 total_batch_size - len(sample_indices))]
             # 将采样的数据平均分给GPU计算
             sample_indices = sample_indices[self.rank:total_size:self.world_size]
-            yield sample_indices
+            yield sample_indices*2
 
     def __len__(self):
         return len(self.dataset)

@@ -225,6 +225,7 @@ class BaseModel(MetaModel, nn.Module):
             num_workers=data_cfg['num_workers'])
         return loader
 
+
     def get_optimizer(self, optimizer_cfg):
         self.msg_mgr.log_info(optimizer_cfg)
         optimizer = get_attr_from([optim], optimizer_cfg['solver'])
@@ -330,6 +331,88 @@ class BaseModel(MetaModel, nn.Module):
 
         typs = typs_batch
         vies = vies_batch
+
+        labs = list2var(labs_batch).long()
+
+        if seqL_batch is not None:
+            seqL_batch = np2var(seqL_batch).int()
+        seqL = seqL_batch
+
+        if seqL is not None:
+            seqL_sum = int(seqL.sum().data.cpu().numpy())
+            ipts = [_[:, :seqL_sum] for _ in seqs]
+        else:
+            ipts = seqs
+        del seqs
+        return ipts, labs, typs, vies, seqL
+
+    def q_inputs_pretreament(self, inputs, use_leg, length):
+        """Conduct transforms on input data.
+
+        Args:
+            inputs: the input data.
+        Returns:
+            tuple: training data including inputs, labels, and some meta data.
+        """
+        seqs_batch, labs_batch, typs_batch, vies_batch, fanme_batch, seqL_batch = inputs
+        trf_cfgs = self.engine_cfg['transform']
+        seq_trfs = get_transform(trf_cfgs)
+        if len(seqs_batch) != len(seq_trfs):
+            raise ValueError(
+                "The number of types of input data and transform should be same. But got {} and {}".format(len(seqs_batch), len(seq_trfs)))
+        requires_grad = bool(self.training)
+        # batch_size = int(len(seqs_batch[0])/2)
+        if use_leg:
+            seqs = [np2var(np.asarray([self.split(trf(fra)) for fra in seq]), requires_grad=requires_grad).float()
+                    for trf, seq in zip(seq_trfs, seqs_batch)]
+        else:
+            seqs = [np2var(np.asarray([trf(fra) for fra in seq[0:length]]), requires_grad=requires_grad).float()
+                    for trf, seq in zip(seq_trfs, seqs_batch)]
+
+        typs = typs_batch[0:length]
+        vies = vies_batch[:length]
+        labs_batch = labs_batch[0:length]
+
+        labs = list2var(labs_batch).long()
+
+        if seqL_batch is not None:
+            seqL_batch = np2var(seqL_batch).int()
+        seqL = seqL_batch
+
+        if seqL is not None:
+            seqL_sum = int(seqL.sum().data.cpu().numpy())
+            ipts = [_[:, :seqL_sum] for _ in seqs]
+        else:
+            ipts = seqs
+        del seqs
+        return ipts, labs, typs, vies, seqL
+
+    def k_inputs_pretreament(self, inputs, use_leg, length):
+        """Conduct transforms on input data.
+
+        Args:
+            inputs: the input data.
+        Returns:
+            tuple: training data including inputs, labels, and some meta data.
+        """
+        seqs_batch, labs_batch, typs_batch, vies_batch, fanme_batch, seqL_batch = inputs
+        # trf_cfgs = self.engine_cfg['transform']
+        trf_cfgs = [{'type': 'DA4GaitSSB'}]
+        seq_trfs = get_transform(trf_cfgs)
+        if len(seqs_batch) != len(seq_trfs):
+            raise ValueError(
+                "The number of types of input data and transform should be same. But got {} and {}".format(len(seqs_batch), len(seq_trfs)))
+        requires_grad = bool(self.training)
+        if use_leg:
+            seqs = [np2var(np.asarray([self.split(trf(fra)) for fra in seq]), requires_grad=requires_grad).float()
+                    for trf, seq in zip(seq_trfs, seqs_batch)]
+        else:
+            seqs = [np2var(np.asarray([trf(fra) for fra in seq[length:]]), requires_grad=requires_grad).float()
+                    for trf, seq in zip(seq_trfs, seqs_batch)]
+
+        typs = typs_batch[length:]
+        vies = vies_batch[length:]
+        labs_batch = labs_batch[length:]
 
         labs = list2var(labs_batch).long()
 
@@ -463,7 +546,61 @@ class BaseModel(MetaModel, nn.Module):
             info_dict[k] = v
         return info_dict
 
-    def ccr_inference(self, rank, use_leg=False, use_aug=True):
+    def ccr_inference(self, rank, use_leg=False, use_aug=False):
+        total_size = len(self.inference_train_loader)
+        if rank == 0:
+            pbar = tqdm(total=total_size, desc='Extract Features')
+        else:
+            pbar = NoOp()
+        batch_size = self.inference_train_loader.batch_sampler.batch_size
+        rest_size = total_size
+        features = OrderedDict()
+        aug_features = OrderedDict()
+        labels = OrderedDict()
+        label_typs = OrderedDict()
+        part_features = OrderedDict()
+
+        for inputs in self.inference_train_loader:
+            if use_aug:
+                aug_inputs = copy.deepcopy(inputs)
+                aug_features = self.aug_pre(aug_inputs, aug_features, use_leg)
+            ipts = self.inputs_pretreament(inputs, use_leg)
+            with autocast(enabled=self.engine_cfg['enable_float16']):
+                retval = self.forward(ipts)
+                inference_feat = retval['inference_feat']
+                del retval
+                outputs = inference_feat['embeddings']
+                part_outputs = outputs
+                part_outputs = part_outputs.to(torch.float32)
+                out_shape = [outputs.size(1), outputs.size(2)]
+                # outputs = ddp_all_gather(outputs, requires_grad=False)
+                outputs = outputs.view(outputs.size(0), -1)
+                outputs = outputs.to(torch.float32)
+                _, real_labels, types, vies, fnames, _ = inputs
+                for fname, output, pid in zip(fnames, outputs, real_labels):
+                    features[fname] = output
+                    labels[fname] = pid
+
+                for fname, output, pid in zip(fnames, part_outputs, real_labels):
+                    part_features[fname] = output
+                    labels[fname] = pid
+
+                # 根据穿衣情况开始画图
+                for fname, label, typ in zip(fnames, real_labels, types):
+                    typ = typ[0:2]
+                    label_typ = "{}{}".format(label, typ)
+                    label_typs[fname] = label_typ
+
+            rest_size -= batch_size
+            if rest_size >= 0:
+                update_size = batch_size
+            else:
+                update_size = total_size % batch_size
+            pbar.update(update_size)
+        pbar.close()
+        return features, out_shape, part_features
+
+    def q_ccr_inference(self, rank, use_leg=False, use_aug=True):
         total_size = len(self.inference_train_loader)
         if rank == 0:
             pbar = tqdm(total=total_size, desc='Extract Features')
@@ -480,7 +617,54 @@ class BaseModel(MetaModel, nn.Module):
             if use_aug:
                 aug_inputs = copy.deepcopy(inputs)
                 aug_features = self.aug_pre(aug_inputs, aug_features, use_leg)
-            ipts = self.inputs_pretreament(inputs, use_leg)
+            ipts = self.q_inputs_pretreament(inputs, use_leg)
+            with autocast(enabled=self.engine_cfg['enable_float16']):
+                retval = self.forward(ipts)
+                inference_feat = retval['inference_feat']
+                del retval
+                outputs = inference_feat['embeddings']
+                out_shape = [outputs.size(1), outputs.size(2)]
+                # outputs = ddp_all_gather(outputs, requires_grad=False)
+                outputs = outputs.view(outputs.size(0), -1)
+                outputs = outputs.to(torch.float32)
+                _, real_labels, types, vies, fnames, _ = inputs
+                for fname, output, pid in zip(fnames, outputs, real_labels):
+                    features[fname] = output
+                    labels[fname] = pid
+
+                # 根据穿衣情况开始画图
+                for fname, label, typ in zip(fnames, real_labels, types):
+                    typ = typ[0:2]
+                    label_typ = "{}{}".format(label, typ)
+                    label_typs[fname] = label_typ
+
+            rest_size -= batch_size
+            if rest_size >= 0:
+                update_size = batch_size
+            else:
+                update_size = total_size % batch_size
+            pbar.update(update_size)
+        pbar.close()
+        return features, aug_features, out_shape
+
+    def k_ccr_inference(self, rank, use_leg=False, use_aug=True):
+        total_size = len(self.inference_train_loader)
+        if rank == 0:
+            pbar = tqdm(total=total_size, desc='Extract Features')
+        else:
+            pbar = NoOp()
+        batch_size = self.inference_train_loader.batch_sampler.batch_size
+        rest_size = total_size
+        features = OrderedDict()
+        aug_features = OrderedDict()
+        labels = OrderedDict()
+        label_typs = OrderedDict()
+
+        for inputs in self.inference_train_loader:
+            if use_aug:
+                aug_inputs = copy.deepcopy(inputs)
+                aug_features = self.aug_pre(aug_inputs, aug_features, use_leg)
+            ipts = self.k_inputs_pretreament(inputs, use_leg)
             with autocast(enabled=self.engine_cfg['enable_float16']):
                 retval = self.forward(ipts)
                 inference_feat = retval['inference_feat']
@@ -523,7 +707,7 @@ class BaseModel(MetaModel, nn.Module):
             _, real_labels, types, vies, fnames, _ = inputs
             for fname, output in zip(fnames, outputs):
                 features[fname] = output
-            return features
+        return features
 
     @ staticmethod
     def run_train(model):
