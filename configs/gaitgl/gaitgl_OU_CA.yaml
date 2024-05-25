@@ -66,6 +66,8 @@ trainer_cfg:
   log_iter: 100
   restore_ckpt_strict: true
   restore_hint: ./output/OUMVLP/GaitGL/GaitGL/checkpoints/GaitGL-210000.pt
+#  restore_hint: "/code/lxl/GaitPRC/ugr_output/CASIA-B/GaitGL/GaitGL/checkpoints/GaitGL-00200.pt"  # gaitGl
+#  restore_hint: "/code/lxl/GaitPRC_copy/ugr_output/CASIA-B/GaitGL/GaitGL/checkpoints/GaitGL-00200.pt" # baseline
   save_iter: 10000
   save_name: GaitGL
   sync_BN: true

@@ -144,7 +144,7 @@ class BaseModel(MetaModel, nn.Module):
 
         if training and self.engine_cfg['enable_float16']:  # 表示使用混合精度
             self.Scaler = GradScaler()
-        self.save_path = osp.join('output/', cfgs['data_cfg']['dataset_name'],
+        self.save_path = osp.join('ugr_output/', cfgs['data_cfg']['dataset_name'],
                                   cfgs['model_cfg']['model'], self.engine_cfg['save_name'])
 
         self.build_network(cfgs['model_cfg'])
@@ -243,8 +243,10 @@ class BaseModel(MetaModel, nn.Module):
         return scheduler
 
     def save_ckpt(self, iteration):
+        save_path = osp.join('ugr_output/', self.cfgs['data_cfg']['dataset_name'],
+                                  self.cfgs['model_cfg']['model'], self.engine_cfg['save_name'])
         if torch.distributed.get_rank() == 0:
-            mkdir(osp.join(self.save_path, "checkpoints/"))
+            mkdir(osp.join(save_path, "checkpoints/"))
             save_name = self.engine_cfg['save_name']
             checkpoint = {
                 'model': self.state_dict(),
@@ -570,10 +572,9 @@ class BaseModel(MetaModel, nn.Module):
                 inference_feat = retval['inference_feat']
                 del retval
                 outputs = inference_feat['embeddings']
-                part_outputs = outputs
+                part_outputs = outputs.clone().detach()
                 part_outputs = part_outputs.to(torch.float32)
-                out_shape = [outputs.size(1), outputs.size(2)]
-                # outputs = ddp_all_gather(outputs, requires_grad=False)
+                out_shape = [outputs.size(0), outputs.size(1), outputs.size(2)]
                 outputs = outputs.view(outputs.size(0), -1)
                 outputs = outputs.to(torch.float32)
                 _, real_labels, types, vies, fnames, _ = inputs
@@ -581,14 +582,15 @@ class BaseModel(MetaModel, nn.Module):
                     features[fname] = output
                     labels[fname] = pid
 
-                for fname, output, pid in zip(fnames, part_outputs, real_labels):
-                    part_features[fname] = output
+                for fname, part_output, pid in zip(fnames, part_outputs, real_labels):
+                    part_features[fname] = part_output
                     labels[fname] = pid
 
                 # 根据穿衣情况开始画图
                 for fname, label, typ in zip(fnames, real_labels, types):
                     typ = typ[0:2]
                     label_typ = "{}{}".format(label, typ)
+                    # label_typ = "{}".format(label)
                     label_typs[fname] = label_typ
 
             rest_size -= batch_size
@@ -598,7 +600,7 @@ class BaseModel(MetaModel, nn.Module):
                 update_size = total_size % batch_size
             pbar.update(update_size)
         pbar.close()
-        return features, out_shape, part_features
+        return features, labels, part_features, out_shape, label_typs
 
     def q_ccr_inference(self, rank, use_leg=False, use_aug=True):
         total_size = len(self.inference_train_loader)

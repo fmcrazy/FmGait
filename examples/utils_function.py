@@ -4,6 +4,7 @@ from __future__ import print_function, absolute_import
 import copy
 import os.path as osp
 
+from examples.function import compute_part_feature
 # from clustercontrast.trainers import compute_soft, compute_model_soft
 from opengait.utils import config_loader, get_ddp_module, init_seeds, params_count, get_msg_mgr
 import torch.distributed as dist
@@ -57,28 +58,39 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
         print('==> Create pseudo labels for unlabeled data')
         seqs_data = [path[-1][0] for path in model.inference_train_loader.dataset.seqs_info]
         rank = torch.distributed.get_rank()
-        features, out_shape, part_features = model.ccr_inference(rank, use_leg)
+        features, labels, part_features, out_shape, label_typs = model.ccr_inference(rank, use_leg=False)
+        # part_features, _, _, _, _ = model.ccr_inference(rank, use_leg=True)
         # aug_features = torch.cat([aug_features[f].unsqueeze(0) for f in sorted(seqs_data)], 0)
         features = torch.cat([features[f].unsqueeze(0) for f in sorted(seqs_data)], 0)  # (8107,15872)
+        # part_features = torch.cat([part_features[f].unsqueeze(0) for f in sorted(seqs_data)], 0)
         aug_features = features.clone()
 
+        labels = [labels[fname] for fname in sorted(seqs_data)]
+        label_typs = [label_typs[fname] for fname in sorted(seqs_data)]
+        # if epoch==0 or epoch == args.epochs - 1:
+        #     typ_t_sne(features, labels, label_typs,person=10, stride=1, legend="GaitCR",
+        #                   use_label_typ='nm', use_all_label=True, perplexity=50, n_iter=1000, figsize=15, cmap='tab20',
+        #                   alpha=0.6, fontsize=10, show_label=False)
+        #     # all_typ_t_sne(features, labels, label_typs, legend="All clothing conditions", person=10, stride=1, use_label_typ='nm',
+        #     #               use_all_label=True, perplexity=50, n_iter=1000, figsize=15 ,cmap='tab20',alpha=0.6, fontsize=10, show_label = True)
+        #     all_typ_t_sne(features, labels, label_typs, person=10, stride=1, legend="All clothing conditions",
+        #                   use_label_typ='nm', use_all_label=True, perplexity=20, n_iter=1000, figsize=5, cmap='tab20',
+        #                   alpha=0.6, fontsize=10, show_label=True)
         part_features = torch.cat([part_features[f].unsqueeze(0) for f in sorted(seqs_data)], 0)
-        part_features = compute_part_feature(part_features, part_num=8)
-        part_features = torch.stack(part_features)
+        part_features = compute_part_feature(part_features, part_num=4)
         score = compute_cross_agreement(features, part_features, k=20)
-        infomap_features = torch.zeros_like(features)
-        # infomap_features = part_features[0]
-        part_features = part_features.permute(1,0,2)
-        N, P = score.size()
-        part_weight = 0.0
-        for i in range(N):
-            sum = 0
-            for j in range(P):
-                sum += part_features[i][j]*score[i][j]
-            infomap_features[i] = part_weight * features[i] + (1-part_weight) * sum
-        features_array = F.normalize(infomap_features, dim=1).cpu().numpy()
+        # infomap_features = torch.zeros_like(features)
+        # infomap_features = part_features[1]
+        # part_features = part_features.permute(1,0,2)
+        # N, P = score.size()
+        # part_weight = 0.0
+        # for i in range(N):
+        #     sum = 0
+        #     for j in range(P):
+        #         sum += part_features[i][j]*score[i][j]
+        #     infomap_features[i] = part_weight * features[i] + (1-part_weight) * sum
+        features_array = F.normalize(features, dim=1).cpu().numpy()
         feat_dists, feat_nbrs = get_dist_nbr(features=features_array, k=args.k1, knn_method='faiss-gpu')
-        del features_array, infomap_features, part_features
 
         s = time.time()
         pseudo_labels = cluster_by_infomap(feat_nbrs, feat_dists, min_sim=args.eps, cluster_num=args.k2)
@@ -88,9 +100,11 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
 
     # 使用聚类中样本的平均值计算质心
     cluster_features = generate_cluster_features(pseudo_labels, features)
-
+    # cluster_features = compute_label_centers_my(pseudo_labels, features, sig=5)
+    part_features = [generate_cluster_features(pseudo_labels, part_features[i]) for i in range(part_features.size(0)) ]
+    part_features = torch.stack(part_features)
     # 使用样本平均距离的权重定义质心
-    # cluster_features = compute_label_centers_my(pseudo_labels, features)
+
 
     refinement_pseudo_labels, dist_martix = label_refinement(pseudo_labels, features, aug_features, cluster_features, args.refine_weight, args.sig)
 
@@ -114,18 +128,26 @@ def cluster_and_memory(model, epoch, args, use_leg=False):
         if label != -1:
             labels_weight[fname] = refinement_pseudo_labels[i][label]
 
+    part_score = OrderedDict()
+    for i, (fname, label) in enumerate(zip(sorted(seqs_data), pseudo_labels)):
+        if label !=-1:
+            part_score[fname] = score[i]
+
     num_cluster = len(set(pseudo_labels)) - (1 if -1 in pseudo_labels else 0)
     num_features = features.size(-1)
-    memory = ClusterMemory(num_features, num_cluster, aug_weight=args.aug_weight, k=args.k, temp=args.temp,
-                           momentum=args.momentum, use_hard=args.use_hard).cuda()
+    memory = ClusterMemory(num_features, num_cluster, out_shape, use_hard=args.use_hard).cuda()
     memory.features = F.normalize(cluster_features, dim=1).cuda()
+    memory.out_shape = out_shape
+
+    memory.part_features = F.normalize(part_features, dim=1).cuda()
+    del part_features
 
     # 使用数据增强初始化一个memory bank
     # aug_memory = compute_aug_memory(aug_features, pseudo_labels, seqs_data, args)
 
     print('==> Statistics for epoch {}: {} clusters'.format(epoch, num_cluster))
 
-    return pseudo_labels, memory, pseudo_labeled_dataset, refinement_pseudo_labeled_dataset
+    return pseudo_labels, memory, pseudo_labeled_dataset, refinement_pseudo_labeled_dataset, part_score
 
 
 def compute_cross_agreement(features_g, features_p, k, search_option=0):
@@ -170,20 +192,6 @@ def compute_aug_memory(features, pseudo_labels, seqs_data, args):
 #     return prob
 
 
-def compute_part_feature(features, part_num):
-    all_part_features = []
-    part_index = math.ceil(features.size(1)/part_num)
-    for i in range(part_num):
-        part_features = torch.zeros_like(features).cuda()
-        if (i+1)*part_index<=features.size(1):
-            part_features[:,i*part_index:(i+1)*part_index,:] = features[:,i*part_index:(i+1)*part_index,:]
-        else:
-            part_features[:,i*part_index:(i+1)*part_index,:] = features[:,i * part_index:features.size(1), :]
-        part_features = part_features.view(part_features.size(0), -1)
-        part_features = part_features.to(torch.float32)
-        all_part_features.append(part_features)
-
-    return all_part_features
 
 
 def compute_knn(all_part_features, k=15):
@@ -253,9 +261,17 @@ def oumvlp_vis_plot(nm_acc, epoch):
     # 显示图形
     plt.show()
 
-def t_sne(features, labels):
+def t_sne(features, labels, person, stride):
     # 画id标签：创建T-SNE模型，将高维数据映射到2维
     features = features.cpu()
+    index = []
+    for i, (f, l) in enumerate(zip(features, labels)):
+        if  l < person and i % stride==0:
+            index.append(i)
+    features = [features[i] for i in index]
+    labels = [labels[i] for i in index]
+    features = torch.stack(features)
+
     tsne = TSNE(n_components=2, perplexity=10, n_iter=300)
     tsne_result = tsne.fit_transform(features)
 
@@ -264,35 +280,140 @@ def t_sne(features, labels):
     plt.scatter(tsne_result[:, 0], tsne_result[:, 1], c=labels, cmap='viridis')
 
     # 在每个数据点附近添加标签
-    for i, label in enumerate(labels):
-        if label % 3 == 0:
-            plt.annotate(label, (tsne_result[i, 0], tsne_result[i, 1]), fontsize=10)
+    # for i, label in enumerate(labels):
+    #     if label % 10 == 0 and i% 3 ==0:
+    #         plt.annotate(label, (tsne_result[i, 0], tsne_result[i, 1]), fontsize=10)
 
     plt.title("T-SNE Visualization")
     plt.colorbar()
     plt.show()
 
-def typ_t_sne(features, labels, label_typs, person, stride):
+
+
+
+def typ_t_sne(features, labels, label_typs, person, stride, legend="Ours", use_label_typ='nm', use_all_label=True, perplexity=50, n_iter=1000, figsize=15 ,cmap='tab20',alpha=0.6, fontsize=15, show_label = True):
     # 画类型标签：创建T-SNE模型，将高维数据映射到2维
     features = features.cpu()
-    res = 110 * person
-    features = features[0:res:stride]
-    labels = labels[0:res:stride]
-    label_typs = label_typs[0:res:stride]
-    tsne = TSNE(n_components=2, perplexity=10, n_iter=300)
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22',
+              '#17becf']
+    nm_index = []
+    bg_index = []
+    cl_index = []
+    all_index = []
+    for i, (f, l, typ) in enumerate(zip(features, labels, label_typs)):
+        if l < person and i % stride == 0:
+            if use_all_label:
+                all_index.append(i)
+            else:
+                if typ.endswith('m'):
+                    nm_index.append(i)
+                elif typ.endswith('g'):
+                    bg_index.append(i)
+                else:
+                    cl_index.append(i)
+    if use_all_label:
+        index = all_index
+    else:
+        if use_label_typ.endswith('m'):
+            index = nm_index
+        elif use_label_typ.endswith('g'):
+            index = nm_index
+        else:
+            index = cl_index
+
+    features = [features[i] for i in index]
+    labels = [labels[i] for i in index]
+    features = torch.stack(features)
+
+    # res = 110 * person
+    # features = features[0:res:stride]
+    # labels = labels[0:res:stride]
+    # label_typs = label_typs[0:res:stride]
+    tsne = TSNE(n_components=2, perplexity=perplexity, n_iter=n_iter)
     tsne_result = tsne.fit_transform(features)
 
     # 绘制T-SNE结果
-    plt.figure(figsize=(17, 17))
-    plt.scatter(tsne_result[:, 0], tsne_result[:, 1], c=labels, cmap='viridis')
+    plt.figure(figsize=(figsize, figsize))
+    plt.scatter(tsne_result[:, 0], tsne_result[:, 1], c=labels, cmap=cmap, alpha=alpha)
+
 
     # 在每个数据点附近添加标签
-    for i, (label_typ, label) in enumerate(zip(label_typs, labels)):
-        # if label % 3 == 0:
-        plt.annotate(label_typ, (tsne_result[i, 0], tsne_result[i, 1]), fontsize=10)
+    if show_label == True:
+        for i, (label_typ, label) in enumerate(zip(label_typs, labels)):
+            plt.annotate(label, (tsne_result[i, 0], tsne_result[i, 1]), fontsize=fontsize)
 
-    plt.title("T-SNE Visualization")
-    plt.colorbar()
+    plt.title(legend, fontsize=16, fontweight='bold')
+    # plt.colorbar(ticks=range(max(labels) + 1), label='Label')
+    # plt.colorbar()
+    plt.show()
+
+def all_typ_t_sne(features, labels, label_typs, person, stride, legend="All clothing conditions", use_label_typ='nm', use_all_label=True, perplexity=50, n_iter=1000, figsize=15 ,cmap='tab20',alpha=0.6, fontsize=10, show_label = True):
+    # 画类型标签：创建T-SNE模型，将高维数据映射到2维
+    features = features.cpu()
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22',
+              '#17becf']
+    nm_index = []
+    bg_index = []
+    cl_index = []
+    all_index = []
+    for i, (f, l, typ) in enumerate(zip(features, labels, label_typs)):
+        if l < person and i % stride == 0:
+            if use_all_label:
+                all_index.append(i)
+            if typ.endswith('m'):
+                    nm_index.append(i)
+            if typ.endswith('g'):
+                    bg_index.append(i)
+            if typ.endswith('l'):
+                    cl_index.append(i)
+
+    features_all = [features[i] for i in all_index]
+    labels_all = [labels[i] for i in all_index]
+    features_all = torch.stack(features_all)
+
+    features_nm= [features[i] for i in nm_index]
+    labels_nm = [labels[i] for i in nm_index]
+    features_nm = torch.stack(features_nm)
+
+    features_bg = [features[i] for i in bg_index]
+    labels_bg = [labels[i] for i in bg_index]
+    features_bg = torch.stack(features_bg)
+
+    features_cl = [features[i] for i in cl_index]
+    labels_cl = [labels[i] for i in cl_index]
+    features_cl = torch.stack(features_cl)
+
+    tsne = TSNE(n_components=2, perplexity=perplexity, n_iter=n_iter)
+    tsne_result_all = tsne.fit_transform(features_all)
+    tsne_result_nm = tsne.fit_transform(features_nm)
+    tsne_result_bg = tsne.fit_transform(features_bg)
+    tsne_result_cl = tsne.fit_transform(features_cl)
+
+
+
+
+    # 一次绘制多图
+    fig, axs = plt.subplots(1, 4, figsize=(figsize*4, figsize))
+
+    axs[0].scatter(tsne_result_all[:, 0], tsne_result_all[:, 1], c=labels_all, cmap=cmap, alpha=alpha)
+    axs[0].set_title('All clothing conditions')
+
+    axs[1].scatter(tsne_result_nm[:, 0], tsne_result_nm[:, 1], c=labels_nm, cmap=cmap, alpha=alpha)
+    axs[1].set_title('NM clothing conditions')
+
+    axs[2].scatter(tsne_result_bg[:, 0], tsne_result_bg[:, 1], c=labels_bg, cmap=cmap, alpha=alpha)
+    axs[2].set_title('BG clothing conditions')
+
+    axs[3].scatter(tsne_result_cl[:, 0], tsne_result_cl[:, 1], c=labels_cl, cmap=cmap, alpha=alpha)
+    axs[3].set_title('CL clothing conditions')
+
+
+    # 在每个数据点附近添加标签
+    # if show_label == True:
+    #     for i, (label_typ, label) in enumerate(zip(label_typs, labels)):
+    #         plt.annotate(label, (tsne_result[i, 0], tsne_result[i, 1]), fontsize=fontsize)
+
+    plt.tight_layout()
     plt.show()
 
 def vie_t_sne(features, labels, label_vies, person, stride):

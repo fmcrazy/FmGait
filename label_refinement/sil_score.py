@@ -74,7 +74,7 @@ def compute_label_centers_my(labels, features, sig): # features是张量
 
     for idx in sorted(centers.keys()):
         mea = sum(cluster_distance[idx])/len(cluster_distance[idx])
-        sigmoid_distance =  [ torch.sigmoid(1*(dist-mea)) for dist in cluster_distance[idx] ]
+        sigmoid_distance =  [ torch.sigmoid(sig*(dist-mea)) for dist in cluster_distance[idx] ]
         # cluster_distance = torch.stack(cluster_distance)
         # sigmoid_distance = keep_top_k(torch.tensor(cluster_distance[idx]), k=1)
         dist_total = sum(sigmoid_distance)

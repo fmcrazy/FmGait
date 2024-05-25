@@ -1,3 +1,0 @@
-==========
-Args:Namespace(dataset='dukemtmcreid', batch_size=256, workers=4, height=256, width=128, arch='resnet50', features=0, dropout=0, resume='logs/model_best.pth.tar', rerank=False, dsbn=False, test_source=False, seed=1, data_dir='/media/yixuan/Project/guangyuan/workpalces/SpCL/examples/data', pooling_type='gem', embedding_features_path='/media/yixuan/Project/guangyuan/workpalces/SpCL/embedding_features/mark1501_res50_ibn/')
-==========

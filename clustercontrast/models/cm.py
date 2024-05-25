@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn, autograd
 
+from examples.function import compute_part_feature
 from label_refinement.sil_score import compute_aug_dist_martix
 
 
@@ -184,11 +185,11 @@ class SoftEntropySmooth(nn.Module):
         return loss
 
 class ClusterMemory(nn.Module, ABC):
-    def __init__(self, num_features, num_samples, aug_weight=0.4,  k=2, temp=0.05, momentum=0.2, use_hard=True):
+    def __init__(self, num_features, num_samples, out_shape, aug_weight=0.4,  k=2, temp=0.05, momentum=0.2, use_hard=True):
         super(ClusterMemory, self).__init__()
         self.num_features = num_features  # 每个特征的维度
         self.num_samples = num_samples   # 聚类的数量
-
+        self.out_shape = out_shape
         self.momentum = momentum
         self.temp = temp
         self.use_hard = use_hard
@@ -198,23 +199,28 @@ class ClusterMemory(nn.Module, ABC):
         self.register_buffer('features', torch.zeros(num_samples, num_features)) # 注册一个缓冲区，并且不需要求梯度（反向传播）
 
 
-    def forward(self, inputs, ema_inputs, targets, refinement_labels=None, use_refine_label=False, use_aug=False):
+    def forward(self, epoch, inputs, ema_inputs, part_out, score, targets, refinement_labels=None, use_refine_label=False, use_aug=False):
 
         # if use_ema:
         #     inputs = F.normalize(inputs, dim=1).cuda()
-
+        # one = self.features.shape[0]
+        # self.part_features = self.features.view(one, self.out_shape[1],self.out_shape[2])
+        # self.part_features = compute_part_feature(self.part_features, part_num=4)
+        # self.part_features = self.part_features[-1]
         inputs = F.normalize(inputs, dim=1).cuda()
-        ema_inputs = F.normalize(ema_inputs).cuda()
+        ema_inputs = F.normalize(ema_inputs, dim=1).cuda()
+        part_out = F.normalize(part_out, dim=1).cuda()
         if self.use_hard:
             outputs = cm_avg(inputs, targets, self.features, self.momentum)
+            # part_outputs = cm_avg(part_out, targets, self.part_features, self.momentum)
         else:
             outputs = cm(inputs, targets, self.features, self.momentum)
+            # part_outputs = cm(part_out, targets, self.partfeatures, self.momentum)
         outputs /= self.temp
-        regression =  compute_aug_dist_martix(targets, self.features, ema_inputs, k=self.k)
+        # regression =  compute_aug_dist_martix(targets, self.features, ema_inputs, k=self.k)
+        regression = compute_aug_dist_martix(targets, self.features, ema_inputs, k=self.k)
         regression = [regression[key] for key in regression.keys()]
         regression = torch.stack(regression)
-        # regression = ema_inputs.mm(self.features.t())
-        # regression /= self.temp
 
         if use_refine_label and use_aug:
             refinement_labels = refinement_labels.cuda()
@@ -228,4 +234,15 @@ class ClusterMemory(nn.Module, ABC):
         else:
             loss = F.cross_entropy(outputs, targets)
 
+        sum = 0
+        for i in range(part_out.size(0)):
+            part_score = score[:, i]
+            # out = cm_avg(part_out[i], targets, self.part_features[i], self.momentum) # 使用动量更新
+            out = inputs.mm(self.part_features[i].t())  # 不使用动量更新
+            out /= self.temp
+            sum +=  torch.mean(part_score * F.cross_entropy(out, targets, reduction='none'))  # 使用score计算损失
+            # sum +=  F.cross_entropy(out, targets) # 不使用socre计算损失
+        sum = sum / part_out.size(0)
+
         return loss
+0

@@ -84,6 +84,13 @@ class DataSet(tordata.Dataset):
             train_set = train_set[0:500]
             label_list = sorted(label_list)
             label_list = label_list[:1000]
+
+        if data_config['dataset_name'] == 'GREW':
+            test_set = test_set[0:2000]
+            train_set = train_set[0:2000]
+            label_list = sorted(label_list)
+            label_list = label_list[:4000]
+
         train_set = [label for label in train_set if label in label_list]
         test_set = [label for label in test_set if label in label_list]
         miss_pids = [label for label in label_list if label not in (
